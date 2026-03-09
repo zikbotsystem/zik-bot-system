@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "ZIK Bot Autofill (MVP)",
+  "version": "1.0.0",
+  "description": "Autofill ZIK login only when opened from the Telegram bot link.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://app.zikanalytics.com/*",
+    "https://zikloginbot.onrender.com/*"
+  ],
+  "action": {
+    "default_title": "ZIK Bot",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.zikanalytics.com/*"],
+      "js": ["config.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
