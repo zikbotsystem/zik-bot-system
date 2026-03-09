@@ -1,8 +1,0 @@
-aiogram==3.24.0
-asyncpg==0.29.0
-python-dotenv==1.0.0
-pytz==2023.3.post1
-
-# Web server (redirect + extension API)
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
