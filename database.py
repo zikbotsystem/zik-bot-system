@@ -191,6 +191,7 @@ class Database:
                 ru,
                 updated_by,
             )
+
     async def save_creds_msg_ids(self, session_id: int, msg_ids: list[int]) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -307,10 +308,10 @@ class Database:
             return res.startswith("DELETE 1")
 
     # -------------------- Accounts --------------------
-    # -------------------- Accounts --------------------
     async def list_accounts(self):
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(
+                """
                 SELECT
                     a.account_id,
                     a.account_name,
@@ -362,7 +363,8 @@ class Database:
                 LEFT JOIN users u2 ON u2.user_id = res.user_id
 
                 ORDER BY a.account_id ASC
-            """)
+                """
+            )
             return [dict(r) for r in rows]
 
     async def get_account(self, account_id: int) -> Optional[dict[str, Any]]:
@@ -371,39 +373,44 @@ class Database:
             return dict(row) if row else None
 
     async def add_account(self, account_name: str, email: str, password: str, custom_url: str | None = None) -> None:
-    custom_url = (custom_url or Config.DEFAULT_ZIK_LOGIN_URL).strip()
-    slug = make_auto_slug(account_name)
-    async with self._pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO zik_accounts (account_name, email, password, custom_url, slug)
-            VALUES ($1,$2,$3,$4,$5)
-            """,
-            account_name.strip(),
-            email.strip(),
-            password.strip(),
-            custom_url,
-            slug,
-        )
+        custom_url = (custom_url or Config.DEFAULT_ZIK_LOGIN_URL).strip()
+        slug = make_auto_slug(account_name)
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO zik_accounts (account_name, email, password, custom_url, slug)
+                VALUES ($1,$2,$3,$4,$5)
+                """,
+                account_name.strip(),
+                email.strip(),
+                password.strip(),
+                custom_url,
+                slug,
+            )
 
-    async def update_account_credentials(self, account_id: int, email: str, password: str,
-                                     custom_url: str | None = None) -> None:
-    custom_url = (custom_url or Config.DEFAULT_ZIK_LOGIN_URL).strip()
-    async with self._pool.acquire() as conn:
-        await conn.execute(
-            """
-            UPDATE zik_accounts
-            SET email=$2,
-                password=$3,
-                custom_url=$4,
-                updated_at=NOW()
-            WHERE account_id=$1
-            """,
-            account_id,
-            email.strip(),
-            password.strip(),
-            custom_url,
-        )
+    async def update_account_credentials(
+        self,
+        account_id: int,
+        email: str,
+        password: str,
+        custom_url: str | None = None,
+    ) -> None:
+        custom_url = (custom_url or Config.DEFAULT_ZIK_LOGIN_URL).strip()
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE zik_accounts
+                SET email=$2,
+                    password=$3,
+                    custom_url=$4,
+                    updated_at=NOW()
+                WHERE account_id=$1
+                """,
+                account_id,
+                email.strip(),
+                password.strip(),
+                custom_url,
+            )
 
     async def request_stop_account(self, account_id: int) -> dict[str, Any]:
         """Mark stop_requested.
@@ -982,7 +989,8 @@ class Database:
                 while True:
                     acc = await conn.fetchrow(
                         """
-                        SELECT * FROM zik_accounts
+                        SELECT *
+                        FROM zik_accounts
                         WHERE is_active=TRUE AND status='free'
                         ORDER BY account_id
                         FOR UPDATE SKIP LOCKED
