@@ -35,12 +35,12 @@ def make_auto_slug(account_name: str) -> str:
         base = "account"
     return f"{base}-{uuid.uuid4().hex[:6]}"
 
+
 def clean_pasted_value(value: str | None) -> str:
     if value is None:
         return ""
 
     s = str(value).replace("\ufeff", "").replace("\u200b", "").strip()
-
     quote_chars = "\"'“”‘’"
 
     while s and s[0] in quote_chars:
@@ -50,6 +50,7 @@ def clean_pasted_value(value: str | None) -> str:
         s = s[:-1].rstrip()
 
     return s
+
 
 @dataclass
 class Account:
@@ -388,58 +389,58 @@ class Database:
             return dict(row) if row else None
 
     async def add_account(self, account_name: str, email: str, password: str, custom_url: str | None = None) -> None:
-    account_name = clean_pasted_value(account_name)
-    email = clean_pasted_value(email)
-    password = clean_pasted_value(password)
+        account_name = clean_pasted_value(account_name)
+        email = clean_pasted_value(email)
+        password = clean_pasted_value(password)
 
-    custom_url = clean_pasted_value(custom_url or Config.DEFAULT_ZIK_LOGIN_URL)
-    if not custom_url:
-        custom_url = Config.DEFAULT_ZIK_LOGIN_URL
+        custom_url = clean_pasted_value(custom_url or Config.DEFAULT_ZIK_LOGIN_URL)
+        if not custom_url:
+            custom_url = Config.DEFAULT_ZIK_LOGIN_URL
 
-    slug = make_auto_slug(account_name)
+        slug = make_auto_slug(account_name)
 
-    async with self._pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO zik_accounts (account_name, email, password, custom_url, slug)
-            VALUES ($1,$2,$3,$4,$5)
-            """,
-            account_name,
-            email,
-            password,
-            custom_url,
-            slug,
-        )
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO zik_accounts (account_name, email, password, custom_url, slug)
+                VALUES ($1,$2,$3,$4,$5)
+                """,
+                account_name,
+                email,
+                password,
+                custom_url,
+                slug,
+            )
 
     async def update_account_credentials(
-    self,
-    account_id: int,
-    email: str,
-    password: str,
-    custom_url: str | None = None,
-) -> None:
-    email = clean_pasted_value(email)
-    password = clean_pasted_value(password)
+        self,
+        account_id: int,
+        email: str,
+        password: str,
+        custom_url: str | None = None,
+    ) -> None:
+        email = clean_pasted_value(email)
+        password = clean_pasted_value(password)
 
-    custom_url = clean_pasted_value(custom_url or Config.DEFAULT_ZIK_LOGIN_URL)
-    if not custom_url:
-        custom_url = Config.DEFAULT_ZIK_LOGIN_URL
+        custom_url = clean_pasted_value(custom_url or Config.DEFAULT_ZIK_LOGIN_URL)
+        if not custom_url:
+            custom_url = Config.DEFAULT_ZIK_LOGIN_URL
 
-    async with self._pool.acquire() as conn:
-        await conn.execute(
-            """
-            UPDATE zik_accounts
-            SET email=$2,
-                password=$3,
-                custom_url=$4,
-                updated_at=NOW()
-            WHERE account_id=$1
-            """,
-            account_id,
-            email,
-            password,
-            custom_url,
-        )
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE zik_accounts
+                SET email=$2,
+                    password=$3,
+                    custom_url=$4,
+                    updated_at=NOW()
+                WHERE account_id=$1
+                """,
+                account_id,
+                email,
+                password,
+                custom_url,
+            )
 
     async def request_stop_account(self, account_id: int) -> dict[str, Any]:
         """Mark stop_requested.
