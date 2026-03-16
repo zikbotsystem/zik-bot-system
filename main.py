@@ -1,11 +1,11 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
-from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import Config
 from database import Database
@@ -31,12 +31,12 @@ async def main():
     await db.init()
 
     bot = Bot(
-    token=Config.BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-)
+        token=Config.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Inject DB into handlers
     dp.message.middleware(DbMiddleware(db))
     dp.callback_query.middleware(DbMiddleware(db))
 
@@ -44,14 +44,22 @@ async def main():
     dp.include_router(admin_router)
     dp.include_router(user_router)
 
-    # Start scheduler background task
-    asyncio.create_task(run_scheduler(bot, db))
+    # webhook qalığı varsa təmizlə
+    await bot.delete_webhook(drop_pending_updates=False)
+
+    scheduler_task = asyncio.create_task(run_scheduler(bot, db))
 
     logger.info("Bot started")
+
     try:
         await dp.start_polling(bot)
     finally:
+        scheduler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scheduler_task
+
         await db.close()
+        await bot.session.close()
 
 
 if __name__ == "__main__":
