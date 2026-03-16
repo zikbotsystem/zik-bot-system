@@ -228,6 +228,25 @@ class Database:
                 await conn.execute("UPDATE sessions SET creds_msg_ids=NULL WHERE session_id=$1", session_id)
                 return [int(x) for x in ids]
 
+    async def save_timer_msg_ids(self, session_id: int, msg_ids: list[int]) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE sessions SET timer_msg_ids=$2 WHERE session_id=$1",
+                session_id,
+                msg_ids,
+            )
+
+    async def pop_timer_msg_ids(self, session_id: int) -> list[int]:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT timer_msg_ids FROM sessions WHERE session_id=$1 FOR UPDATE",
+                    session_id,
+                )
+                ids = list(row["timer_msg_ids"] or []) if row else []
+                await conn.execute("UPDATE sessions SET timer_msg_ids=NULL WHERE session_id=$1", session_id)
+                return [int(x) for x in ids]
+
     # -------------------- Complaints / Feedback --------------------
     async def add_complaint(self, user_id: int, text: str) -> int:
         user = await self.get_user(user_id)
