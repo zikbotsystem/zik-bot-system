@@ -51,6 +51,14 @@ def _is_admin(user_id: int) -> bool:
     return user_id in set(_get_admin_ids())
 
 
+async def _safe_delete_messages(bot, chat_id: int, message_ids: list[int]) -> None:
+    for mid in message_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=int(mid))
+        except Exception:
+            pass
+
+
 def kb_home_menu(lang: str, user_id: int):
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "👤 İstifadəçi menyusu", "👤 Меню пользователя"), callback_data="user:main")
@@ -74,7 +82,10 @@ async def user_main(callback: CallbackQuery, db: Database):
 async def user_back(callback: CallbackQuery, db: Database, state: FSMContext):
     await state.clear()
     lang = await db.get_language(callback.from_user.id)
-    await callback.message.edit_text(_tr(lang, "🏠 Əsas menyu", "🏠 Главное меню"), reply_markup=kb_home_menu(lang, callback.from_user.id))
+    await callback.message.edit_text(
+        _tr(lang, "🏠 Əsas menyu", "🏠 Главное меню"),
+        reply_markup=kb_home_menu(lang, callback.from_user.id),
+    )
     await callback.answer()
 
 
@@ -164,7 +175,10 @@ async def user_feedback_receive(message: Message, db: Database, state: FSMContex
             pass
 
     await state.clear()
-    await message.answer(_tr(lang, f"✅ Göndərildi. Şikayət ID: {cid}.", f"✅ Отправлено. ID жалобы: {cid}."), reply_markup=kb_user_main(lang))
+    await message.answer(
+        _tr(lang, f"✅ Göndərildi. Şikayət ID: {cid}.", f"✅ Отправлено. ID жалобы: {cid}."),
+        reply_markup=kb_user_main(lang),
+    )
 
 
 @router.callback_query(F.data == "user:rules")
@@ -214,12 +228,10 @@ async def user_get_account(callback: CallbackQuery, db: Database):
         await callback.answer()
         return
 
-    # Aktiv/rezerve sessiya varsa göstər
     existing = await db.get_user_active_session(user_id)
     if existing:
         st = existing.get("state")
         account_name = existing.get("account_name")
-        custom_url = existing.get("custom_url")
         token = str(existing.get("token"))
         session_id = int(existing.get("session_id"))
 
@@ -245,15 +257,16 @@ async def user_get_account(callback: CallbackQuery, db: Database):
             login_url = _append_token(Config.ZIK_LOGIN_URL, token)
             text = _tr(
                 lang,
-                f"✅ Aktiv hesab: {account_name}\nQalan vaxt: {max(0, remaining//60)} dəq.",
-                f"✅ Активный аккаунт: {account_name}\nОсталось: {max(0, remaining//60)} мин.",
+                f"✅ Aktiv hesab: {account_name}\nQalan vaxt: {max(0, remaining // 60)} dəq.",
+                f"✅ Активный аккаунт: {account_name}\nОсталось: {max(0, remaining // 60)} мин.",
             )
-            # login_url boş olsa da problem yoxdur: keyboard içində URL düyməsi ola bilər.
-            await callback.message.edit_text(text, reply_markup=kb_account_active(login_url, session_id, lang, show_extend=show_extend))
+            await callback.message.edit_text(
+                text,
+                reply_markup=kb_account_active(login_url, session_id, lang, show_extend=show_extend),
+            )
             await callback.answer()
             return
 
-    # Yeni sərbəst hesab rezerv et
     s = await db.reserve_free_account(user_id, from_queue=False, confirm_minutes=Config.CONFIRM_MINUTES_DIRECT)
     if not s:
         text1 = _tr(lang, "⚠️ Hazırda bütün ZIK hesabları məşğuldur", "⚠️ На данный момент все ZIK аккаунты заняты")
@@ -350,7 +363,6 @@ async def user_enter(callback: CallbackQuery, db: Database):
         return
 
     account_name = s.get("account_name")
-    custom_url = s.get("custom_url")
     token = str(s.get("token"))
     login_url = _append_token(Config.ZIK_LOGIN_URL, token)
 
@@ -409,14 +421,6 @@ async def user_release(callback: CallbackQuery, db: Database):
     lang = await db.get_language(user_id)
     session_id = int(callback.data.split(":")[-1])
 
-    # əvvəlcə creds mesajlarını sil
-    msg_ids = await db.pop_creds_msg_ids(session_id)
-    for mid in msg_ids:
-        try:
-            await callback.bot.delete_message(chat_id=user_id, message_id=int(mid))
-        except Exception:
-            pass
-
     res = await db.release_session(user_id, session_id, require_tab_closed=True)
     if not res.get("ok") and res.get("reason") == "tab_open":
         await callback.answer(
@@ -433,7 +437,16 @@ async def user_release(callback: CallbackQuery, db: Database):
         await callback.answer(_tr(lang, "❌ Alınmadı", "❌ Не удалось"), show_alert=True)
         return
 
-    await callback.message.edit_text(_tr(lang, "✅ Hesab sərbəst buraxıldı.", "✅ Аккаунт был освобожден."), reply_markup=kb_user_main(lang))
+    creds_msg_ids = await db.pop_creds_msg_ids(session_id)
+    await _safe_delete_messages(callback.bot, user_id, creds_msg_ids)
+
+    timer_msg_ids = await db.pop_timer_msg_ids(session_id)
+    await _safe_delete_messages(callback.bot, user_id, timer_msg_ids)
+
+    await callback.message.edit_text(
+        _tr(lang, "✅ Hesab sərbəst buraxıldı.", "✅ Аккаунт был освобожден."),
+        reply_markup=kb_user_main(lang),
+    )
     await callback.answer()
 
 
@@ -458,9 +471,16 @@ async def user_extend_apply(callback: CallbackQuery, db: Database):
         await callback.answer(_tr(lang, "❌ Uzatma mümkün deyil", "❌ Продление недоступно"), show_alert=True)
         return
 
+    timer_msg_ids = await db.pop_timer_msg_ids(session_id)
+    await _safe_delete_messages(callback.bot, user_id, timer_msg_ids)
+
     new_end = r["new_end"]
     remaining_min = max(0, int((new_end - now_baku()).total_seconds() // 60))
 
-    await callback.message.answer(_tr(lang, f"✅ Müddət {minutes} dəqiqə uzadıldı.", f"✅ Время использования продлено на {minutes} мин."))
-    await callback.message.answer(_tr(lang, f"✅ Ümumi qalan vaxt: {remaining_min} dəq.", f"✅ Общее оставшееся время: {remaining_min} мин."))
+    await callback.message.answer(
+        _tr(lang, f"✅ Müddət {minutes} dəqiqə uzadıldı.", f"✅ Время использования продлено на {minutes} мин.")
+    )
+    await callback.message.answer(
+        _tr(lang, f"✅ Ümumi qalan vaxt: {remaining_min} dəq.", f"✅ Общее оставшееся время: {remaining_min} мин.")
+    )
     await callback.answer()
