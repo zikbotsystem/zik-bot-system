@@ -1085,10 +1085,10 @@ class Database:
 
     # -------------------- Admin users list --------------------
         async def list_users_for_admin(self) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT user_id,
+           async with self._pool.acquire() as conn:
+              rows = await conn.fetch(
+                 """
+                    SELECT user_id,
                        username,
                        display_name,
                        violations_count,
@@ -1098,7 +1098,7 @@ class Database:
                        subscription_enabled,
                        subscription_end_at,
                        created_at
-                FROM users
+                   FROM users
                 """
-            )
-            return [dict(r) for r in rows]
+             )
+         return [dict(r) for r in rows]
