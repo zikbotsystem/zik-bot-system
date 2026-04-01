@@ -20,9 +20,13 @@ from utils import add_months, next_month_day_15, parse_date, tz_now
 router = Router(name="admin")
 
 
-def _is_admin(user_id: int) -> bool:
+def _get_admin_ids() -> list[int]:
     ids = getattr(Config, "ADMIN_IDS", []) or []
-    return user_id in ids
+    return [int(x) for x in ids]
+
+
+def _is_admin(user_id: int) -> bool:
+    return int(user_id) in set(_get_admin_ids())
 
 
 # ---------- TIMEZONE HELPERS ----------
@@ -64,6 +68,38 @@ def _format_who(display_name: str | None, username: str | None, user_id: int | N
     return str(user_id) if user_id else "-"
 
 
+def _user_display_name(u: dict) -> str:
+    display_name = (u.get("display_name") or "").strip()
+    username = (u.get("username") or "").strip()
+
+    if display_name:
+        return display_name
+    if username:
+        return f"@{username}"
+    return f"User {u['user_id']}"
+
+
+def _user_sort_key(u: dict):
+    created_at = _to_baku(u.get("created_at"))
+    if created_at is None:
+        return (1, int(u["user_id"]))
+    return (0, created_at, int(u["user_id"]))
+
+
+def _split_and_sort_users(users: list[dict]) -> tuple[list[dict], list[dict]]:
+    admin_ids = _get_admin_ids()
+    admin_set = set(admin_ids)
+
+    admins = [u for u in users if int(u["user_id"]) in admin_set]
+    regulars = [u for u in users if int(u["user_id"]) not in admin_set]
+
+    admin_order = {uid: i for i, uid in enumerate(admin_ids)}
+    admins.sort(key=lambda u: (admin_order.get(int(u["user_id"]), 999999),) + _user_sort_key(u))
+    regulars.sort(key=_user_sort_key)
+
+    return admins, regulars
+
+
 def _format_mmss(seconds: int) -> str:
     seconds = max(0, int(seconds))
     m = seconds // 60
@@ -103,7 +139,6 @@ def _extract_email_password(raw: str) -> Tuple[Optional[str], Optional[str]]:
     if email_idx + 1 < len(lines):
         password = lines[email_idx + 1]
 
-    # fallback: email olmayan ilk sətir
     if not password:
         for i, line in enumerate(lines):
             if i != email_idx:
@@ -116,6 +151,57 @@ def _extract_email_password(raw: str) -> Tuple[Optional[str], Optional[str]]:
 def _zik_login_url() -> str:
     url = getattr(Config, "ZIK_LOGIN_URL", None) or "https://app.zikanalytics.com/login"
     return url.strip()
+
+
+async def _show_user_details(target_user_id: int, event_message, db: Database, state: FSMContext, actor_user_id: int):
+    lang = await db.get_language(actor_user_id)
+    user = await db.get_user(target_user_id)
+
+    if not user:
+        await event_message.edit_text(
+            _tr(lang, "❌ İstifadəçi tapılmadı", "❌ Пользователь не найден"),
+            reply_markup=kb_back("admin:users", lang),
+        )
+        return
+
+    await state.update_data(target_user_id=target_user_id)
+    await state.set_state(UserSelect.user_id)
+
+    sub_end = user.get("subscription_end_at")
+    sub_end_s = sub_end.strftime("%Y-%m-%d") if sub_end else "-"
+    sub_enabled = bool(user.get("subscription_enabled"))
+    username = user.get("username")
+    username_text = f"@{username}" if username else "-"
+
+    text = _tr(
+        lang,
+        (
+            f"İstifadəçi ID: {target_user_id}\n"
+            f"Ad: {user.get('display_name') or '-'}\n"
+            f"Username: {username_text}\n"
+            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv'}\n"
+            f"Bitmə tarixi: {sub_end_s}"
+        ),
+        (
+            f"Пользователь ID: {target_user_id}\n"
+            f"Имя: {user.get('display_name') or '-'}\n"
+            f"Username: {username_text}\n"
+            f"Подписка: {'Активна' if sub_enabled else 'Деактивирована'}\n"
+            f"Окончание: {sub_end_s}"
+        ),
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
+    kb.button(text=_tr(lang, "1 ay aktiv et", "Активировать 1 месяц"), callback_data="admin:user:sub:1m")
+    kb.button(text=_tr(lang, "Ayın 15-ə kimi", "До 15-го след. месяца"), callback_data="admin:user:sub:15")
+    kb.button(text=_tr(lang, "Tarix seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
+    kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
+    kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:user:delete")
+    kb.button(text=get_text("back", lang), callback_data="admin:users")
+    kb.adjust(2, 2, 2, 1)
+
+    await event_message.edit_text(text, reply_markup=kb.as_markup())
 
 
 # -------------------- FSM --------------------
@@ -182,25 +268,88 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
 
     if not users:
         text = _tr(lang, "İstifadəçi yoxdur", "Пользователей нет")
-    else:
-        lines = []
-        for u in users:
-            name = u.get("display_name") or (("@" + u.get("username")) if u.get("username") else "")
+        await callback.message.edit_text(text, reply_markup=kb_back("admin:main", lang))
+        await callback.answer()
+        return
+
+    admins, regulars = _split_and_sort_users(users)
+
+    lines: list[str] = []
+    kb = InlineKeyboardBuilder()
+
+    if admins:
+        lines.append(_tr(lang, "👑 Adminlər", "👑 Админы"))
+        for u in admins:
+            uid = int(u["user_id"])
+            name = _user_display_name(u)
             viol = int(u.get("violations_count") or 0)
             days = int(u.get("last_ban_days") or 0)
-            sus = "⚠️" if u.get("is_suspicious") else ""
-            if lang == "az":
-                lines.append(f"{sus}ID: {u['user_id']} ; {name} ; (Poz. - {viol} / Gün - {days})")
-            else:
-                lines.append(f"{sus}ID: {u['user_id']} ; {name} ; (Наруш. - {viol} / Дни - {days})")
-        text = "\n".join(lines)
+            sus = " ⚠️" if u.get("is_suspicious") else ""
+
+            lines.append(f"{name}{sus}")
+            lines.append(
+                _tr(
+                    lang,
+                    f"Pozuntu: {viol} | Son ban: {days} gün",
+                    f"Нарушения: {viol} | Последний бан: {days} дн.",
+                )
+            )
+            lines.append("")
+            kb.button(text=str(uid), callback_data=f"admin:user:open:{uid}")
+
+    if admins and regulars:
+        lines.append("")
+
+    if regulars:
+        lines.append(_tr(lang, "👤 İstifadəçilər", "👤 Пользователи"))
+        for u in regulars:
+            uid = int(u["user_id"])
+            name = _user_display_name(u)
+            viol = int(u.get("violations_count") or 0)
+            days = int(u.get("last_ban_days") or 0)
+            sus = " ⚠️" if u.get("is_suspicious") else ""
+
+            lines.append(f"{name}{sus}")
+            lines.append(
+                _tr(
+                    lang,
+                    f"Pozuntu: {viol} | Son ban: {days} gün",
+                    f"Нарушения: {viol} | Последний бан: {days} дн.",
+                )
+            )
+            lines.append("")
+            kb.button(text=str(uid), callback_data=f"admin:user:open:{uid}")
+
+    while lines and lines[-1] == "":
+        lines.pop()
 
     prompt = _tr(
         lang,
-        "\n\nİstifadəçini idarə etmək üçün ID göndərin:",
-        "\n\nЧтобы управлять пользователем, отправьте его ID:",
+        "\n\nID düyməsinə basın və ya ID göndərin:",
+        "\n\nНажмите на кнопку ID или отправьте ID:",
     )
-    await callback.message.edit_text(text + prompt, reply_markup=kb_back("admin:main", lang))
+
+    kb.button(text=get_text("back", lang), callback_data="admin:main")
+    kb.adjust(*([1] * len(users)), 1)
+
+    await callback.message.edit_text("\n".join(lines) + prompt, reply_markup=kb.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:user:open:"))
+async def admin_user_open_by_button(callback: CallbackQuery, db: Database, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer("Not allowed", show_alert=True)
+        return
+
+    lang = await db.get_language(callback.from_user.id)
+    try:
+        user_id = int(callback.data.split(":")[-1])
+    except Exception:
+        await callback.answer(_tr(lang, "❌ ID yanlışdır", "❌ Неверный ID"), show_alert=True)
+        return
+
+    await _show_user_details(user_id, callback.message, db, state, callback.from_user.id)
     await callback.answer()
 
 
@@ -226,20 +375,22 @@ async def admin_user_selected(message: Message, db: Database, state: FSMContext)
     sub_end = user.get("subscription_end_at")
     sub_end_s = sub_end.strftime("%Y-%m-%d") if sub_end else "-"
     sub_enabled = bool(user.get("subscription_enabled"))
+    username = user.get("username")
+    username_text = f"@{username}" if username else "-"
 
     text = _tr(
         lang,
         (
             f"İstifadəçi ID: {user_id}\n"
             f"Ad: {user.get('display_name') or '-'}\n"
-            f"Username: @{user.get('username') or '-'}\n"
+            f"Username: {username_text}\n"
             f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv'}\n"
             f"Bitmə tarixi: {sub_end_s}"
         ),
         (
             f"Пользователь ID: {user_id}\n"
             f"Имя: {user.get('display_name') or '-'}\n"
-            f"Username: @{user.get('username') or '-'}\n"
+            f"Username: {username_text}\n"
             f"Подписка: {'Активна' if sub_enabled else 'Деактивирована'}\n"
             f"Окончание: {sub_end_s}"
         ),
@@ -403,7 +554,6 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
         await callback.answer()
         return
 
-    now = now_baku()
     lines: list[str] = []
 
     for i, a in enumerate(accounts, start=1):
@@ -413,20 +563,17 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
             "Активен" if a.get("is_active") else "Неактивен",
         )
 
-        status = a.get("status")  # free / reserved / occupied
+        status = a.get("status")
 
-        # ACTIVE session join fields
         auid = a.get("active_user_id")
         aun = a.get("active_username")
         adn = a.get("active_display_name")
 
-        # RESERVED join fields
         ruid = a.get("reserved_user_id")
         run = a.get("reserved_username")
         rdn = a.get("reserved_display_name")
         rdead = a.get("reserved_deadline")
 
-        # session end fields (compat)
         end_at = (
             a.get("active_session_end_at")
             or a.get("session_end_at")
@@ -521,7 +668,6 @@ async def admin_acc_add_name(message: Message, db: Database, state: FSMContext):
     await state.update_data(account_name=(message.text or "").strip())
     await state.set_state(AddAccount.creds)
 
-    # ✅ NÜMUNƏ YOX!
     await message.answer(
         _tr(lang, "Gmail və Parolu göndərin (başlıq yazsanız da olar):", "Отправьте Gmail и пароль (можно с заголовком):"),
         reply_markup=kb_cancel("admin:manage_accounts", lang),
@@ -543,7 +689,6 @@ async def admin_acc_add_creds(message: Message, db: Database, state: FSMContext)
         return
 
     try:
-        # ✅ URL həmişə ZIK_LOGIN_URL olacaq
         await db.add_account(account_name, email, password, _zik_login_url())
     except Exception as e:
         await message.answer(_tr(lang, f"❌ Xəta: {e}", f"❌ Ошибка: {e}"))
@@ -588,7 +733,6 @@ async def admin_acc_edit_id(message: Message, db: Database, state: FSMContext):
     await state.update_data(acc_id=acc_id)
     await state.set_state(EditAccount.creds)
 
-    # ✅ NÜMUNƏ YOX!
     await message.answer(_tr(lang, "Yeni Gmail və Parolu göndərin (başlıq yazsanız da olar):", "Отправьте новый Gmail и пароль (можно с заголовком):"))
 
 
