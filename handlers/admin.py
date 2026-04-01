@@ -264,12 +264,18 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         return
 
     admins, regulars = _split_and_sort_users(users)
-    ordered_users = admins + regulars
 
-    lines: list[str] = []
-    kb = InlineKeyboardBuilder()
+    # əvvəlki siyahı mesajını dəyiş
+    await callback.message.edit_text(
+        _tr(
+            lang,
+            "İstifadəçilər siyahısı aşağıdadır:",
+            "Список пользователей ниже:",
+        ),
+        reply_markup=kb_back("admin:main", lang),
+    )
 
-    for idx, u in enumerate(ordered_users, start=1):
+    async def send_user_block(u: dict):
         user_id = int(u["user_id"])
         name_part = _user_display_name(u)
 
@@ -280,26 +286,40 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         days = int(u.get("last_ban_days") or 0)
         sus = "⚠️ " if u.get("is_suspicious") else ""
 
-        lines.append(f"{sus}{name_part}")
-        lines.append(_tr(lang, f"Poz. - {viol} / Gün - {days}", f"Наруш. - {viol} / Дни - {days}"))
-        lines.append(f"ID: {user_id}")
-        lines.append("")
+        text = (
+            f"{sus}{name_part}\n"
+            f"{_tr(lang, f'Poz. - {viol} / Gün - {days}', f'Наруш. - {viol} / Дни - {days}')}\n"
+            f"ID: {user_id}"
+        )
 
+        kb = InlineKeyboardBuilder()
         kb.button(text=str(user_id), callback_data=f"admin:user_open:{user_id}")
+        kb.adjust(1)
 
-        if idx == len(admins) and regulars:
-            lines.append("")
+        await callback.message.answer(text, reply_markup=kb.as_markup())
 
-    text = _tr(
-        lang,
-        "İstifadəçilər siyahısı:\n\n" + "\n".join(lines).strip(),
-        "Список пользователей:\n\n" + "\n".join(lines).strip(),
+    # adminlər yuxarıda
+    for u in admins:
+        await send_user_block(u)
+
+    # admin və user arası boş ayırıcı
+    if admins and regulars:
+        await callback.message.answer(" ")
+
+    # adi userlər aşağıda
+    for u in regulars:
+        await send_user_block(u)
+
+    # sonda izah mesajı
+    await callback.message.answer(
+        _tr(
+            lang,
+            "İstifadəçini açmaq üçün altındakı ID düyməsini basın.",
+            "Чтобы открыть пользователя, нажмите кнопку ID под ним.",
+        ),
+        reply_markup=kb_back("admin:main", lang),
     )
 
-    kb.button(text=get_text("back", lang), callback_data="admin:main")
-    kb.adjust(*([1] * len(ordered_users)), 1)
-
-    await callback.message.edit_text(text, reply_markup=kb.as_markup())
     await callback.answer()
 
 
