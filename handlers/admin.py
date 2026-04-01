@@ -265,17 +265,9 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
 
     admins, regulars = _split_and_sort_users(users)
 
-    # əvvəlki siyahı mesajını dəyiş
-    await callback.message.edit_text(
-        _tr(
-            lang,
-            "İstifadəçilər siyahısı aşağıdadır:",
-            "Список пользователей ниже:",
-        ),
-        reply_markup=kb_back("admin:main", lang),
-    )
+    blocks = []
 
-    async def send_user_block(u: dict):
+    def build_block(u: dict) -> str:
         user_id = int(u["user_id"])
         name_part = _user_display_name(u)
 
@@ -286,42 +278,96 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         days = int(u.get("last_ban_days") or 0)
         sus = "⚠️ " if u.get("is_suspicious") else ""
 
-        text = (
+        fines = _tr(lang, f"Poz. - {viol} / Gün - {days}", f"Наруш. - {viol} / Дни - {days}")
+
+        return (
             f"{sus}{name_part}\n"
-            f"{_tr(lang, f'Poz. - {viol} / Gün - {days}', f'Наруш. - {viol} / Дни - {days}')}\n"
-            f"ID: {user_id}"
+            f"{fines}\n"
+            f"/u_{user_id}"
         )
 
-        kb = InlineKeyboardBuilder()
-        kb.button(text=str(user_id), callback_data=f"admin:user_open:{user_id}")
-        kb.adjust(1)
+    if admins:
+        for u in admins:
+            blocks.append(build_block(u))
 
-        await callback.message.answer(text, reply_markup=kb.as_markup())
-
-    # adminlər yuxarıda
-    for u in admins:
-        await send_user_block(u)
-
-    # admin və user arası boş ayırıcı
     if admins and regulars:
-        await callback.message.answer(" ")
+        blocks.append("")
 
-    # adi userlər aşağıda
-    for u in regulars:
-        await send_user_block(u)
+    if regulars:
+        for u in regulars:
+            blocks.append(build_block(u))
 
-    # sonda izah mesajı
-    await callback.message.answer(
-        _tr(
-            lang,
-            "İstifadəçini açmaq üçün altındakı ID düyməsini basın.",
-            "Чтобы открыть пользователя, нажмите кнопку ID под ним.",
-        ),
-        reply_markup=kb_back("admin:main", lang),
+    footer = _tr(
+        lang,
+        "\n\nİstifadəçini açmaq üçün ID sətrinin üstünə basın.",
+        "\n\nЧтобы открыть пользователя, нажмите на строку с ID.",
     )
 
+    text = "\n\n".join(blocks) + footer
+
+    await callback.message.edit_text(text, reply_markup=kb_back("admin:main", lang))
     await callback.answer()
 
+@router.message(F.text.regexp(r"^/u_(\d+)$"))
+async def admin_user_open_by_command(message: Message, db: Database, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+
+    lang = await db.get_language(message.from_user.id)
+
+    raw = (message.text or "").strip()
+    m = re.match(r"^/u_(\d+)$", raw)
+    if not m:
+        return
+
+    user_id = int(m.group(1))
+    user = await db.get_user(user_id)
+
+    if not user:
+        await message.answer(
+            _tr(lang, "❌ İstifadəçi tapılmadı", "❌ Пользователь не найден"),
+            reply_markup=kb_back("admin:users", lang),
+        )
+        return
+
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(UserSelect.user_id)
+
+    sub_end = user.get("subscription_end_at")
+    sub_end_s = sub_end.strftime("%Y-%m-%d") if sub_end else "-"
+    sub_enabled = bool(user.get("subscription_enabled"))
+    username = user.get("username")
+    username_text = f"@{username}" if username else "-"
+
+    text = _tr(
+        lang,
+        (
+            f"İstifadəçi ID: {user_id}\n"
+            f"Ad: {user.get('display_name') or '-'}\n"
+            f"Username: {username_text}\n"
+            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv'}\n"
+            f"Bitmə tarixi: {sub_end_s}"
+        ),
+        (
+            f"Пользователь ID: {user_id}\n"
+            f"Имя: {user.get('display_name') or '-'}\n"
+            f"Username: {username_text}\n"
+            f"Подписка: {'Активна' if sub_enabled else 'Деактивирована'}\n"
+            f"Окончание: {sub_end_s}"
+        ),
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
+    kb.button(text=_tr(lang, "1 ay aktiv et", "Активировать 1 месяц"), callback_data="admin:user:sub:1m")
+    kb.button(text=_tr(lang, "Ayın 15-ə kimi", "До 15-го след. месяца"), callback_data="admin:user:sub:15")
+    kb.button(text=_tr(lang, "Tarix seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
+    kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
+    kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:user:delete")
+    kb.button(text=get_text("back", lang), callback_data="admin:users")
+    kb.adjust(2, 2, 2, 1)
+
+    await message.answer(text, reply_markup=kb.as_markup())
 
 @router.callback_query(F.data.startswith("admin:user_open:"))
 async def admin_user_open_from_button(cb: CallbackQuery, db: Database, state: FSMContext):
