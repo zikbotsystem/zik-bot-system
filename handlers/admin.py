@@ -19,8 +19,6 @@ from utils import add_months, next_month_day_15, parse_date, tz_now
 
 router = Router(name="admin")
 
-USERS_PER_PAGE = 8
-
 
 def _get_admin_ids() -> list[int]:
     ids = getattr(Config, "ADMIN_IDS", []) or []
@@ -116,6 +114,7 @@ def _extract_email_password(raw: str) -> Tuple[Optional[str], Optional[str]]:
         if _EMAIL_RE.match(line):
             email_idx = i
             break
+
     if email_idx is None:
         return None, None
 
@@ -139,14 +138,20 @@ def _zik_login_url() -> str:
     return url.strip()
 
 
-async def _show_user_details(target_user_id: int, event_message, db: Database, state: FSMContext, actor_user_id: int):
+async def _show_user_details(
+    target_user_id: int,
+    event_message,
+    db: Database,
+    state: FSMContext,
+    actor_user_id: int,
+):
     lang = await db.get_language(actor_user_id)
     user = await db.get_user(target_user_id)
 
     if not user:
         await event_message.edit_text(
             _tr(lang, "❌ İstifadəçi tapılmadı", "❌ Пользователь не найден"),
-            reply_markup=kb_back("admin:users:page:1", lang),
+            reply_markup=kb_back("admin:users", lang),
         )
         return
 
@@ -184,91 +189,10 @@ async def _show_user_details(target_user_id: int, event_message, db: Database, s
     kb.button(text=_tr(lang, "Tarix seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
     kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
     kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:user:delete")
-    kb.button(text=get_text("back", lang), callback_data="admin:users:page:1")
+    kb.button(text=get_text("back", lang), callback_data="admin:users")
     kb.adjust(2, 2, 2, 1)
 
     await event_message.edit_text(text, reply_markup=kb.as_markup())
-
-
-async def _render_users_page(message_obj, db: Database, state: FSMContext, actor_user_id: int, page: int):
-    lang = await db.get_language(actor_user_id)
-    users = await db.list_users_for_admin()
-
-    if not users:
-        await message_obj.edit_text(
-            _tr(lang, "İstifadəçi yoxdur", "Пользователей нет"),
-            reply_markup=kb_back("admin:main", lang),
-        )
-        return
-
-    admins, regulars = _split_and_sort_users(users)
-    ordered_users = admins + regulars
-
-    total = len(ordered_users)
-    total_pages = max(1, (total + USERS_PER_PAGE - 1) // USERS_PER_PAGE)
-    page = max(1, min(page, total_pages))
-
-    start = (page - 1) * USERS_PER_PAGE
-    end = start + USERS_PER_PAGE
-    page_users = ordered_users[start:end]
-
-    lines: list[str] = []
-    kb = InlineKeyboardBuilder()
-
-    for u in page_users:
-        user_id = int(u["user_id"])
-        name_part = _user_display_name(u)
-
-        if user_id in set(_get_admin_ids()):
-            name_part += " (Admin)"
-
-        viol = int(u.get("violations_count") or 0)
-        days = int(u.get("last_ban_days") or 0)
-        sus = "⚠️ " if u.get("is_suspicious") else ""
-
-        lines.append(f"{sus}{name_part}")
-        lines.append(_tr(lang, f"Poz. - {viol} / Gün - {days}", f"Наруш. - {viol} / Дни - {days}"))
-        lines.append("")
-
-        kb.button(text=f"ID: {user_id}", callback_data=f"admin:user_open:{user_id}")
-
-    nav_buttons = 0
-    if page > 1:
-        kb.button(text="⬅️", callback_data=f"admin:users:page:{page - 1}")
-        nav_buttons += 1
-    if page < total_pages:
-        kb.button(text="➡️", callback_data=f"admin:users:page:{page + 1}")
-        nav_buttons += 1
-
-    kb.button(text=get_text("back", lang), callback_data="admin:main")
-
-    adjust_rows = [1] * len(page_users)
-    if nav_buttons == 2:
-        adjust_rows.append(2)
-        adjust_rows.append(1)
-    elif nav_buttons == 1:
-        adjust_rows.append(1)
-        adjust_rows.append(1)
-    else:
-        adjust_rows.append(1)
-
-    kb.adjust(*adjust_rows)
-
-    header = _tr(
-        lang,
-        f"İstifadəçilər siyahısı ({page}/{total_pages})\n\n",
-        f"Список пользователей ({page}/{total_pages})\n\n",
-    )
-    footer = _tr(
-        lang,
-        "\nID düyməsinə basın və istifadəçi menyusu açılsın.",
-        "\nНажмите кнопку ID, чтобы открыть меню пользователя.",
-    )
-
-    text = header + "\n".join(lines).strip() + footer
-
-    await state.set_state(UserSelect.user_id)
-    await message_obj.edit_text(text, reply_markup=kb.as_markup())
 
 
 class AddAccount(StatesGroup):
@@ -314,6 +238,7 @@ async def admin_main(callback: CallbackQuery, db: Database, state: FSMContext):
     if not _is_admin(callback.from_user.id):
         await callback.answer("Not allowed", show_alert=True)
         return
+
     await state.clear()
     lang = await db.get_language(callback.from_user.id)
     await callback.message.edit_text(get_text("admin_menu", lang), reply_markup=kb_admin_main(lang))
@@ -325,22 +250,56 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
     if not _is_admin(callback.from_user.id):
         await callback.answer("Not allowed", show_alert=True)
         return
-    await _render_users_page(callback.message, db, state, callback.from_user.id, 1)
-    await callback.answer()
 
+    await state.set_state(UserSelect.user_id)
+    lang = await db.get_language(callback.from_user.id)
+    users = await db.list_users_for_admin()
 
-@router.callback_query(F.data.startswith("admin:users:page:"))
-async def admin_users_page(callback: CallbackQuery, db: Database, state: FSMContext):
-    if not _is_admin(callback.from_user.id):
-        await callback.answer("Not allowed", show_alert=True)
+    if not users:
+        await callback.message.edit_text(
+            _tr(lang, "İstifadəçi yoxdur", "Пользователей нет"),
+            reply_markup=kb_back("admin:main", lang),
+        )
+        await callback.answer()
         return
 
-    try:
-        page = int(callback.data.split(":")[-1])
-    except Exception:
-        page = 1
+    admins, regulars = _split_and_sort_users(users)
+    ordered_users = admins + regulars
 
-    await _render_users_page(callback.message, db, state, callback.from_user.id, page)
+    lines: list[str] = []
+    kb = InlineKeyboardBuilder()
+
+    for idx, u in enumerate(ordered_users, start=1):
+        user_id = int(u["user_id"])
+        name_part = _user_display_name(u)
+
+        if user_id in set(_get_admin_ids()):
+            name_part += " (Admin)"
+
+        viol = int(u.get("violations_count") or 0)
+        days = int(u.get("last_ban_days") or 0)
+        sus = "⚠️ " if u.get("is_suspicious") else ""
+
+        lines.append(f"{sus}{name_part}")
+        lines.append(_tr(lang, f"Poz. - {viol} / Gün - {days}", f"Наруш. - {viol} / Дни - {days}"))
+        lines.append(f"ID: {user_id}")
+        lines.append("")
+
+        kb.button(text=str(user_id), callback_data=f"admin:user_open:{user_id}")
+
+        if idx == len(admins) and regulars:
+            lines.append("")
+
+    text = _tr(
+        lang,
+        "İstifadəçilər siyahısı:\n\n" + "\n".join(lines).strip(),
+        "Список пользователей:\n\n" + "\n".join(lines).strip(),
+    )
+
+    kb.button(text=get_text("back", lang), callback_data="admin:main")
+    kb.adjust(*([1] * len(ordered_users)), 1)
+
+    await callback.message.edit_text(text, reply_markup=kb.as_markup())
     await callback.answer()
 
 
@@ -358,6 +317,11 @@ async def admin_user_open_from_button(cb: CallbackQuery, db: Database, state: FS
         await cb.answer(_tr(lang, "ID yanlışdır", "Неверный ID"), show_alert=True)
         return
 
+    user = await db.get_user(user_id)
+    if not user:
+        await cb.answer(_tr(lang, "İstifadəçi tapılmadı", "Пользователь не найден"), show_alert=True)
+        return
+
     await _show_user_details(user_id, cb.message, db, state, cb.from_user.id)
     await cb.answer()
 
@@ -368,13 +332,55 @@ async def admin_user_selected(message: Message, db: Database, state: FSMContext)
         return
 
     lang = await db.get_language(message.from_user.id)
+
     try:
         user_id = int((message.text or "").strip())
     except ValueError:
         await message.answer(_tr(lang, "❌ ID yanlışdır", "❌ Неверный ID"), reply_markup=kb_back("admin:main", lang))
         return
 
-    await _show_user_details(user_id, message, db, state, message.from_user.id)
+    user = await db.get_user(user_id)
+    if not user:
+        await message.answer(_tr(lang, "❌ İstifadəçi tapılmadı", "❌ Пользователь не найден"), reply_markup=kb_back("admin:users", lang))
+        return
+
+    await state.update_data(target_user_id=user_id)
+
+    sub_end = user.get("subscription_end_at")
+    sub_end_s = sub_end.strftime("%Y-%m-%d") if sub_end else "-"
+    sub_enabled = bool(user.get("subscription_enabled"))
+    username = user.get("username")
+    username_text = f"@{username}" if username else "-"
+
+    text = _tr(
+        lang,
+        (
+            f"İstifadəçi ID: {user_id}\n"
+            f"Ad: {user.get('display_name') or '-'}\n"
+            f"Username: {username_text}\n"
+            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv'}\n"
+            f"Bitmə tarixi: {sub_end_s}"
+        ),
+        (
+            f"Пользователь ID: {user_id}\n"
+            f"Имя: {user.get('display_name') or '-'}\n"
+            f"Username: {username_text}\n"
+            f"Подписка: {'Активна' if sub_enabled else 'Деактивирована'}\n"
+            f"Окончание: {sub_end_s}"
+        ),
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
+    kb.button(text=_tr(lang, "1 ay aktiv et", "Активировать 1 месяц"), callback_data="admin:user:sub:1m")
+    kb.button(text=_tr(lang, "Ayın 15-ə kimi", "До 15-го след. месяца"), callback_data="admin:user:sub:15")
+    kb.button(text=_tr(lang, "Tarix seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
+    kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
+    kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:user:delete")
+    kb.button(text=get_text("back", lang), callback_data="admin:users")
+    kb.adjust(2, 2, 2, 1)
+
+    await message.answer(text, reply_markup=kb.as_markup())
 
 
 @router.callback_query(F.data == "admin:user:set_name")
@@ -382,6 +388,7 @@ async def admin_user_set_name(cb: CallbackQuery, db: Database, state: FSMContext
     if not _is_admin(cb.from_user.id):
         await cb.answer("Not allowed", show_alert=True)
         return
+
     lang = await db.get_language(cb.from_user.id)
     await state.set_state(UserSetName.name)
     await cb.message.edit_text(
@@ -395,9 +402,11 @@ async def admin_user_set_name(cb: CallbackQuery, db: Database, state: FSMContext
 async def admin_user_set_name_msg(message: Message, db: Database, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
+
     lang = await db.get_language(message.from_user.id)
     data = await state.get_data()
     target = int(data.get("target_user_id")) if data.get("target_user_id") else None
+
     if not target:
         await state.clear()
         await message.answer(
@@ -420,6 +429,7 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
     lang = await db.get_language(cb.from_user.id)
     data = await state.get_data()
     target = int(data.get("target_user_id")) if data.get("target_user_id") else None
+
     if not target:
         await cb.answer(_tr(lang, "İstifadəçi seçilməyib", "Пользователь не выбран"), show_alert=True)
         return
@@ -462,6 +472,7 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
 async def admin_user_sub_custom(message: Message, db: Database, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
+
     lang = await db.get_language(message.from_user.id)
     data = await state.get_data()
     target = int(data.get("target_user_id")) if data.get("target_user_id") else None
@@ -470,6 +481,7 @@ async def admin_user_sub_custom(message: Message, db: Database, state: FSMContex
     if not dt:
         await message.answer(_tr(lang, "❌ Tarix formatı yanlışdır", "❌ Неверный формат даты"))
         return
+
     if not target:
         await message.answer(_tr(lang, "❌ İstifadəçi seçilməyib", "❌ Пользователь не выбран"))
         return
@@ -495,6 +507,7 @@ async def admin_user_delete(cb: CallbackQuery, db: Database, state: FSMContext):
     lang = await db.get_language(cb.from_user.id)
     data = await state.get_data()
     target = int(data.get("target_user_id")) if data.get("target_user_id") else None
+
     if not target:
         await cb.answer(_tr(lang, "İstifadəçi seçilməyib", "Пользователь не выбран"), show_alert=True)
         return
@@ -523,26 +536,20 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
     )
 
     if not accounts:
-        await callback.message.edit_text(
-            header + _tr(lang, "Hesab yoxdur", "Аккаунтов нет"),
-            reply_markup=kb_back("admin:main", lang),
-        )
+        await callback.message.edit_text(header + _tr(lang, "Hesab yoxdur", "Аккаунтов нет"), reply_markup=kb_back("admin:main", lang))
         await callback.answer()
         return
 
     lines: list[str] = []
 
     for i, a in enumerate(accounts, start=1):
-        left = _tr(
-            lang,
-            "Aktiv" if a.get("is_active") else "Deaktiv",
-            "Активен" if a.get("is_active") else "Неактивен",
-        )
-
+        left = _tr(lang, "Aktiv" if a.get("is_active") else "Deaktiv", "Активен" if a.get("is_active") else "Неактивен")
         status = a.get("status")
+
         auid = a.get("active_user_id")
         aun = a.get("active_username")
         adn = a.get("active_display_name")
+
         ruid = a.get("reserved_user_id")
         run = a.get("reserved_username")
         rdn = a.get("reserved_display_name")
@@ -574,6 +581,7 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
                 f"Məşğul: {who} | Qalan: {remain_mmss} | Bitir: {end_s}",
                 f"Занят: {who} | Осталось: {remain_mmss} | Конец: {end_s}",
             )
+
         elif status == "reserved" and ruid:
             who = _format_who(rdn, run, int(ruid))
             remain_mmss = "0:00"
@@ -582,6 +590,7 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
                 if rdead_local:
                     remain_sec = int((rdead_local - now_baku()).total_seconds())
                     remain_mmss = _format_mmss(remain_sec)
+
             right = _tr(
                 lang,
                 f"Rezervdə: {who} — {remain_mmss}",
@@ -703,7 +712,6 @@ async def admin_acc_edit_id(message: Message, db: Database, state: FSMContext):
 
     await state.update_data(acc_id=acc_id)
     await state.set_state(EditAccount.creds)
-
     await message.answer(_tr(lang, "Yeni Gmail və Parolu göndərin (başlıq yazsanız da olar):", "Отправьте новый Gmail и пароль (можно с заголовком):"))
 
 
@@ -715,6 +723,7 @@ async def admin_acc_edit_creds(message: Message, db: Database, state: FSMContext
     lang = await db.get_language(message.from_user.id)
     data = await state.get_data()
     acc_id = int(data.get("acc_id") or 0)
+
     if not acc_id:
         await state.clear()
         await message.answer(_tr(lang, "❌ Hesab seçilməyib", "❌ Аккаунт не выбран"))
@@ -745,6 +754,7 @@ async def admin_acc_action(cb: CallbackQuery, db: Database, state: FSMContext):
     action = cb.data.split(":")[-1]
     await state.set_state(SimpleAskId.value)
     await state.update_data(acc_action=action)
+
     await cb.message.answer(
         _tr(
             lang,
