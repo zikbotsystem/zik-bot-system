@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from locales import get_text
@@ -16,9 +15,14 @@ def kb_language():
 
 def kb_choose_role(lang: str):
     kb = InlineKeyboardBuilder()
-    # Role labels are intentionally fixed (as in the assignment)
-    kb.button(text="Админ как войти" if lang == "ru" else "Admin kimi daxil ol", callback_data="role:admin")
-    kb.button(text="Пользователь как войти" if lang == "ru" else "İstifadəçi kimi daxil ol", callback_data="role:user")
+    kb.button(
+        text="Админ как войти" if lang == "ru" else "Admin kimi daxil ol",
+        callback_data="role:admin",
+    )
+    kb.button(
+        text="Пользователь как войти" if lang == "ru" else "İstifadəçi kimi daxil ol",
+        callback_data="role:user",
+    )
     kb.adjust(2)
     return kb.as_markup()
 
@@ -31,7 +35,6 @@ def kb_back(callback_data: str, lang: str):
 
 
 def kb_cancel(back_cb: str, lang: str):
-    """A single "Cancel" button that returns to a given callback route."""
     kb = InlineKeyboardBuilder()
     kb.button(text=get_text("cancel", lang), callback_data=back_cb)
     kb.adjust(1)
@@ -52,21 +55,17 @@ def kb_admin_main(lang: str):
 
 
 def kb_user_main(lang: str):
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-
     kb = InlineKeyboardBuilder()
 
     kb.button(text=get_text("rules", lang), callback_data="user:rules")
     kb.button(text=get_text("video_tutorial", lang), callback_data="user:video")
     kb.button(text=get_text("get_zik_account", lang), callback_data="user:get_account")
-
     kb.button(text=get_text("my_fines", lang), callback_data="user:fines")
     kb.button(text=get_text("feedback", lang), callback_data="user:feedback")
     kb.button(text=get_text("back", lang), callback_data="user:back")
 
     kb.adjust(1, 1, 1, 1, 1, 1)
     return kb.as_markup()
-
 
 
 def kb_account_offer(session_id: int, lang: str):
@@ -83,11 +82,13 @@ def kb_account_active(login_url: str, session_id: int, lang: str, show_extend: b
     kb.button(text=get_text("enter_zik", lang), url=login_url)
     kb.button(text=get_text("release_account", lang), callback_data=f"user:release:{session_id}")
     kb.button(text=get_text("copy_credentials", lang), callback_data=f"user:copy:{session_id}")
+
     if show_extend:
         kb.button(text=get_text("extend_time", lang), callback_data=f"user:extend:{session_id}")
         kb.adjust(2, 1, 1)
     else:
         kb.adjust(2, 1)
+
     return kb.as_markup()
 
 
