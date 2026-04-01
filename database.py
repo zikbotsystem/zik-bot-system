@@ -1084,14 +1084,21 @@ class Database:
         return assignments
 
     # -------------------- Admin users list --------------------
-    async def list_users_for_admin(self) -> list[dict[str, Any]]:
+        async def list_users_for_admin(self) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT user_id, username, display_name, violations_count, last_ban_days, banned_until, is_suspicious,
-                       subscription_enabled, subscription_end_at
+                SELECT user_id,
+                       username,
+                       display_name,
+                       violations_count,
+                       last_ban_days,
+                       banned_until,
+                       is_suspicious,
+                       subscription_enabled,
+                       subscription_end_at,
+                       created_at
                 FROM users
-                ORDER BY user_id
                 """
             )
             return [dict(r) for r in rows]
