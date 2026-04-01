@@ -1048,6 +1048,7 @@ class Database:
                     )
                     if not acc:
                         break
+
                     user_id = await self.pop_next_queue_user(conn)
                     if user_id is None:
                         break
@@ -1066,6 +1067,7 @@ class Database:
                         user_id,
                         deadline,
                     )
+
                     s = await conn.fetchrow(
                         """
                         INSERT INTO sessions (user_id, account_id, state, from_queue, reserved_at, confirm_deadline_at, token)
@@ -1077,18 +1079,24 @@ class Database:
                         deadline,
                         token,
                     )
+
                     assignments.append(
-                        {"user_id": user_id, "session_id": int(s["session_id"]), "account_name": acc["account_name"], "confirm_minutes": confirm_minutes}
+                        {
+                            "user_id": user_id,
+                            "session_id": int(s["session_id"]),
+                            "account_name": acc["account_name"],
+                            "confirm_minutes": confirm_minutes,
+                        }
                     )
 
         return assignments
 
     # -------------------- Admin users list --------------------
-        async def list_users_for_admin(self) -> list[dict[str, Any]]:
-           async with self._pool.acquire() as conn:
-              rows = await conn.fetch(
-                 """
-                    SELECT user_id,
+    async def list_users_for_admin(self) -> list[dict[str, Any]]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT user_id,
                        username,
                        display_name,
                        violations_count,
@@ -1098,7 +1106,7 @@ class Database:
                        subscription_enabled,
                        subscription_end_at,
                        created_at
-                   FROM users
+                FROM users
                 """
-             )
-         return [dict(r) for r in rows]
+            )
+            return [dict(r) for r in rows]
