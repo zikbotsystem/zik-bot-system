@@ -69,4 +69,4 @@ class Config:
     WARNINGS_BEFORE_BAN: int = int(_env("WARNINGS_BEFORE_BAN", "3") or "3")
 
     # --- Links / Content ---
-    VIDEO_TUTORIAL_URL: str = _env("VIDEO_TUTORIAL_URL", "https://youtu.be/Sj1yZctqcKU") or "https://youtu.be/Sj1yZctqcKU"
+    VIDEO_TUTORIAL_URL: str = _env("VIDEO_TUTORIAL_URL", "https://youtu.be/qDL4L3FSotc") or "https://youtu.be/qDL4L3FSotc" 
