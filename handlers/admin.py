@@ -245,13 +245,12 @@ async def admin_main(callback: CallbackQuery, db: Database, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin:users")
+@router.callback_query(F.data.startswith("admin:users"))
 async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
     if not _is_admin(callback.from_user.id):
         await callback.answer("Not allowed", show_alert=True)
         return
 
-    await state.set_state(UserSelect.user_id)
     lang = await db.get_language(callback.from_user.id)
     users = await db.list_users_for_admin()
 
@@ -263,9 +262,30 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         await callback.answer()
         return
 
-    admins, regulars = _split_and_sort_users(users)
+    await state.set_state(UserSelect.user_id)
 
-    blocks = []
+    admins, regulars = _split_and_sort_users(users)
+    all_users = admins + regulars
+
+    PAGE_SIZE = 50
+    SAFE_TEXT_LIMIT = 3500  # запас до лимита Telegram
+
+    # callback_data может быть:
+    # admin:users
+    # admin:users:0
+    # admin:users:50
+    parts = callback.data.split(":")
+    offset = 0
+    if len(parts) >= 3:
+        try:
+            offset = int(parts[2])
+        except ValueError:
+            offset = 0
+
+    if offset < 0:
+        offset = 0
+    if offset >= len(all_users):
+        offset = max(0, len(all_users) - PAGE_SIZE)
 
     def build_block(u: dict) -> str:
         user_id = int(u["user_id"])
@@ -278,7 +298,11 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         days = int(u.get("last_ban_days") or 0)
         sus = "⚠️ " if u.get("is_suspicious") else ""
 
-        fines = _tr(lang, f"Poz. - {viol} / Gün - {days}", f"Наруш. - {viol} / Дни - {days}")
+        fines = _tr(
+            lang,
+            f"Poz. - {viol} / Gün - {days}",
+            f"Наруш. - {viol} / Дни - {days}"
+        )
 
         return (
             f"{sus}{name_part}\n"
@@ -286,26 +310,70 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
             f"/u_{user_id}"
         )
 
-    if admins:
-        for u in admins:
-            blocks.append(build_block(u))
+    page_users = all_users[offset:offset + PAGE_SIZE]
 
-    if admins and regulars:
-        blocks.append("")
+    blocks = []
+    shown_count = 0
 
-    if regulars:
-        for u in regulars:
-            blocks.append(build_block(u))
+    for u in page_users:
+        block = build_block(u)
+
+        footer_preview = _tr(
+            lang,
+            "\n\nİstifadəçini açmaq üçün ID sətrinin üstünə basın.",
+            "\n\nЧтобы открыть пользователя, нажмите на строку с ID.",
+        )
+
+        test_text = "\n\n".join(blocks + [block]) + footer_preview
+
+        if len(test_text) > SAFE_TEXT_LIMIT:
+            break
+
+        blocks.append(block)
+        shown_count += 1
+
+    if not blocks:
+        # На всякий случай, если даже 1 блок оказался слишком длинным
+        first_user = page_users[0]
+        blocks = [build_block(first_user)]
+        shown_count = 1
+
+    current_page = (offset // PAGE_SIZE) + 1
+    total_pages = (len(all_users) + PAGE_SIZE - 1) // PAGE_SIZE
 
     footer = _tr(
         lang,
-        "\n\nİstifadəçini açmaq üçün ID sətrinin üstünə basın.",
-        "\n\nЧтобы открыть пользователя, нажмите на строку с ID.",
+        f"\n\nSəhifə {current_page}/{total_pages}\nİstifadəçini açmaq üçün ID sətrinin üstünə basın.",
+        f"\n\nСтраница {current_page}/{total_pages}\nЧтобы открыть пользователя, нажмите на строку с ID.",
     )
 
     text = "\n\n".join(blocks) + footer
 
-    await callback.message.edit_text(text, reply_markup=kb_back("admin:main", lang))
+    prev_offset = max(0, offset - PAGE_SIZE)
+    next_offset = offset + shown_count
+
+    kb = InlineKeyboardBuilder()
+
+    if offset > 0:
+        kb.button(
+            text=_tr(lang, "⬅️ Geri", "⬅️ Назад"),
+            callback_data=f"admin:users:{prev_offset}"
+        )
+
+    if next_offset < len(all_users):
+        kb.button(
+            text=_tr(lang, "İrəli ➡️", "Вперёд ➡️"),
+            callback_data=f"admin:users:{next_offset}"
+        )
+
+    kb.button(
+        text=get_text("back", lang),
+        callback_data="admin:main"
+    )
+
+    kb.adjust(2, 1)
+
+    await callback.message.edit_text(text, reply_markup=kb.as_markup())
     await callback.answer()
 
 @router.message(F.text.regexp(r"^/u_(\d+)$"))
