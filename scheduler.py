@@ -7,7 +7,7 @@ from aiogram import Bot
 
 from config import Config
 from database import Database
-from keyboards import kb_account_offer, kb_extend_options
+from keyboards import kb_account_offer, kb_extend_options, kb_after_warning
 from utils import format_dt
 
 
@@ -89,6 +89,7 @@ async def run_scheduler(bot: Bot, db: Database):
 
                 if ev["type"] == "session_expired":
                     session_id = int(ev["session_id"])
+                    account_name = ev.get("account_name", "ZIK")
 
                     # Köhnə timer / creds mesajlarını sil
                     timer_msg_ids = await db.pop_timer_msg_ids(session_id)
@@ -96,6 +97,14 @@ async def run_scheduler(bot: Bot, db: Database):
 
                     creds_msg_ids = await db.pop_creds_msg_ids(session_id)
                     await _safe_delete_messages(bot, uid, creds_msg_ids)
+
+                    # НОВОЕ: Сообщение о том, что бот сам освободил аккаунт
+                    release_msg = _tr(
+                        lang,
+                        f"Bot '{account_name}' hesabını özü sərbəst buraxdı.",
+                        f"Бот автоматически освободил аккаунт '{account_name}'."
+                    )
+                    await bot.send_message(uid, release_msg)
 
                     # violation + possible ban
                     result = await db.add_violation_and_maybe_ban(uid)
@@ -106,7 +115,8 @@ async def run_scheduler(bot: Bot, db: Database):
                             f"❗ Siz botdan istifadə qaydalarını pozmusunuz (ZIK hesabını sərbəst buraxmamaq). Bu {warn_no}-ci xəbərdarlıqdır. 3 xəbərdarlıqdan sonra giriş 1 gün bağlanacaq.",
                             f"❗ Вы нарушили правила использования бота (не освободили аккаунт). Это {warn_no}-ое предупреждение. После 3-го предупреждения доступ будет закрыт на 1 день.",
                         )
-                        await bot.send_message(uid, msg)
+                        # Добавляем спасительную кнопку возврата в меню
+                        await bot.send_message(uid, msg, reply_markup=kb_after_warning(lang))
                     else:
                         ban_days = int(result.get("ban_days") or 1)
                         until = result.get("banned_until")
@@ -116,7 +126,8 @@ async def run_scheduler(bot: Bot, db: Database):
                             f"‼️ 3 təkrar pozuntuya görə giriş {ban_days} gün bağlandı. Giriş {until_s} tarixində bərpa olunacaq.",
                             f"‼️ По причине трёх повторных нарушений доступ закрыт на {ban_days} день. Доступ восстановится в {until_s}.",
                         )
-                        await bot.send_message(uid, msg)
+                        # Добавляем спасительную кнопку возврата в меню
+                        await bot.send_message(uid, msg, reply_markup=kb_after_warning(lang))
 
             # 4) Assign free accounts to queue users
             assignments = await db.assign_free_accounts_to_queue()
@@ -134,8 +145,8 @@ async def run_scheduler(bot: Bot, db: Database):
                 )
                 text2 = _tr(
                     lang,
-                    f"❗ Əgər ZIK-ə daxil olmaq istəyirsinizsə, mütləq 'ZIK-ə daxil ol' düyməsini {timeout} dəqiqə ərzində basın. Əks halda hesab sərbəst buraxılacaq.",
-                    f"❗ Если хотите войти в ZIK, обязательно нажмите кнопку 'Войти в ZIK' в течении {timeout} минут. Иначе аккаунт освободится.",
+                    f"❗ Bu hesabı götürmək üçün mütləq 'Təsdiqlə' düyməsini {timeout} dəqiqə ərzində basın. Əks halda hesab sərbəst buraxılacaq.",
+                    f"❗ Для взятия этого аккаунта обязательно нажмите кнопку 'Подтвердить' в течение {timeout} минут. Иначе аккаунт будет освобождён.",
                 )
 
                 await bot.send_message(uid, text1)
