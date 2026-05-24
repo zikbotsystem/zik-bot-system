@@ -15,7 +15,7 @@ from config import Config
 from database import Database, now_baku
 from keyboards import kb_admin_main, kb_back, kb_cancel
 from locales import get_text
-from utils import add_months, next_month_day_15, parse_date, tz_now
+from utils import add_months, next_month_day_20, parse_date, tz_now
 
 router = Router(name="admin")
 
@@ -73,12 +73,23 @@ def _user_display_name(u: dict) -> str:
     return f"User {u['user_id']}"
 
 
-def _user_sort_key(u: dict):
-    created_at = _to_baku(u.get("created_at"))
-    if created_at is None:
-        return (1, int(u["user_id"]))
-    return (0, created_at, int(u["user_id"]))
+def _az_sort_key(name: str) -> list[int]:
+    # Карта весов для букв азербайджанского алфавита (регистронезависимая)
+    az_alphabet = "abcçdeəfgğhıijkqlmnoöprsştuüvyz"
+    weights = {char: idx for idx, char in enumerate(az_alphabet)}
+    
+    result = []
+    
+    # ИЗОЛЯЦИЯ ПЕРВОГО СЛОВА: берем только само имя до первого пробела
+    first_word = name.split()[0] if name else ""
 
+    for char in first_word.lower():
+        if char in weights:
+            result.append(weights[char])
+        else:
+            # Для цифр и спецсимволов оставляем их код, но сдвигаем дальше алфавита
+            result.append(100 + ord(char))
+    return result
 
 def _split_and_sort_users(users: list[dict]) -> tuple[list[dict], list[dict]]:
     admin_ids = _get_admin_ids()
@@ -88,9 +99,31 @@ def _split_and_sort_users(users: list[dict]) -> tuple[list[dict], list[dict]]:
     regulars = [u for u in users if int(u["user_id"]) not in admin_set]
 
     admin_order = {uid: i for i, uid in enumerate(admin_ids)}
-    admins.sort(key=lambda u: (admin_order.get(int(u["user_id"]), 999999),) + _user_sort_key(u))
-    regulars.sort(key=_user_sort_key)
+    
+    # Сортировка админов (по порядку из настроек)
+    admins.sort(key=lambda u: admin_order.get(int(u["user_id"]), 999999))
 
+    # Умная сортировка обычных пользователей:
+    # 1. Сначала разделяем: названные/активированные (группа 0) и абсолютно новые «гости» (группа 1).
+    #    Новый гость — это тот, у кого имя начинается на "User " или подписка никогда не активировалась (нет даты конца).
+    # 2. Названных пользователей сортируем по азербайджанскому алфавиту.
+    # 3. Новых пользователей сортируем по дате добавления (кто позже зашел — тот ниже).
+    def regular_sort_logic(u: dict):
+        display_name = (u.get("display_name") or "").strip()
+        sub_end = u.get("subscription_end_at")
+        
+        # Проверяем, является ли пользователь абсолютно новым гостем
+        is_new_guest = not display_name or display_name.startswith("User ") or sub_end is None
+        
+        if is_new_guest:
+            # Группа 1: Уходят в самый конец списка и сортируются по дате создания
+            created_at = u.get("created_at") or datetime.min
+            return (1, created_at, int(u["user_id"]))
+        else:
+            # Группа 0: Идут в начале по азербайджанскому алфавиту
+            return (0, _az_sort_key(display_name), int(u["user_id"]))
+
+    regulars.sort(key=regular_sort_logic)
     return admins, regulars
 
 
@@ -170,7 +203,7 @@ async def _show_user_details(
             f"İstifadəçi ID: {target_user_id}\n"
             f"Ad: {user.get('display_name') or '-'}\n"
             f"Username: {username_text}\n"
-            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv'}\n"
+            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv olundu'}\n"
             f"Bitmə tarixi: {sub_end_s}"
         ),
         (
@@ -184,9 +217,9 @@ async def _show_user_details(
 
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
-    kb.button(text=_tr(lang, "1 ay aktiv et", "Активировать 1 месяц"), callback_data="admin:user:sub:1m")
-    kb.button(text=_tr(lang, "Ayın 15-ə kimi", "До 15-го след. месяца"), callback_data="admin:user:sub:15")
-    kb.button(text=_tr(lang, "Tarix seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
+    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:users:sub:all_20")
+    kb.button(text=_tr(lang, "Gələn ayın 20-nə kimi", "До 20-го след. месяца"), callback_data="admin:user:sub:20")
+    kb.button(text=_tr(lang, "Tarixi seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
     kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
     kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:user:delete")
     kb.button(text=get_text("back", lang), callback_data="admin:users")
@@ -256,7 +289,7 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
 
     if not users:
         await callback.message.edit_text(
-            _tr(lang, "İstifadəçi yoxdur", "Пользователей нет"),
+            _tr(lang, "İstifadəçilər yoxdur", "Пользователей нет"),
             reply_markup=kb_back("admin:main", lang),
         )
         await callback.answer()
@@ -298,11 +331,24 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         days = int(u.get("last_ban_days") or 0)
         sus = "⚠️ " if u.get("is_suspicious") else ""
 
-        fines = _tr(
-            lang,
-            f"Poz. - {viol} / Gün - {days}",
-            f"Наруш. - {viol} / Дни - {days}"
-        )
+        # Вытаскиваем дату окончания подписки
+        sub_end = u.get("subscription_end_at")
+        
+        # Если дата есть (подписка активировалась), форматируем её как ГГГГ-ММ-ДД
+        if sub_end:
+            sub_date_s = sub_end.strftime("%Y-%m-%d")
+            fines = _tr(
+                lang,
+                f"Poz. - {viol} / Gün - {days} / ({sub_date_s})",
+                f"Наруш. - {viol} / Дни - {days} / ({sub_date_s})"
+            )
+        else:
+            # Если подписка никогда не активировалась или была удалена из базы
+            fines = _tr(
+                lang,
+                f"Poz. - {viol} / Gün - {days}",
+                f"Наруш. - {viol} / Дни - {days}"
+            )
 
         return (
             f"{sus}{name_part}\n"
@@ -320,8 +366,8 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
 
         footer_preview = _tr(
             lang,
-            "\n\nİstifadəçini açmaq üçün ID sətrinin üstünə basın.",
-            "\n\nЧтобы открыть пользователя, нажмите на строку с ID.",
+            "\n\nİstifadəçini açmaq üçün onun ID sətrinin üzərinə basın.",
+            "\n\nЧтобы открыть пользователя, нажмите на его строку с ID.",
         )
 
         test_text = "\n\n".join(blocks + [block]) + footer_preview
@@ -343,8 +389,8 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
 
     footer = _tr(
         lang,
-        f"\n\nSəhifə {current_page}/{total_pages}\nİstifadəçini açmaq üçün ID sətrinin üstünə basın.",
-        f"\n\nСтраница {current_page}/{total_pages}\nЧтобы открыть пользователя, нажмите на строку с ID.",
+        f"\n\nSəhifə {current_page}/{total_pages}\nİstifadəçini açmaq üçün onun ID sətrinin üzərinə basın.",
+        f"\n\nСтраница {current_page}/{total_pages}\nЧтобы открыть пользователя, нажмите на его строку с ID.",
     )
 
     text = "\n\n".join(blocks) + footer
@@ -413,7 +459,7 @@ async def admin_user_open_by_command(message: Message, db: Database, state: FSMC
             f"İstifadəçi ID: {user_id}\n"
             f"Ad: {user.get('display_name') or '-'}\n"
             f"Username: {username_text}\n"
-            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv'}\n"
+            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv olunub'}\n"
             f"Bitmə tarixi: {sub_end_s}"
         ),
         (
@@ -427,9 +473,9 @@ async def admin_user_open_by_command(message: Message, db: Database, state: FSMC
 
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
-    kb.button(text=_tr(lang, "1 ay aktiv et", "Активировать 1 месяц"), callback_data="admin:user:sub:1m")
-    kb.button(text=_tr(lang, "Ayın 15-ə kimi", "До 15-го след. месяца"), callback_data="admin:user:sub:15")
-    kb.button(text=_tr(lang, "Tarix seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
+    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:users:sub:all_20")
+    kb.button(text=_tr(lang, "Gələn ayın 20-nə kimi", "До 20-го след. месяца"), callback_data="admin:user:sub:20")
+    kb.button(text=_tr(lang, "Tarixi seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
     kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
     kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:user:delete")
     kb.button(text=get_text("back", lang), callback_data="admin:users")
@@ -492,7 +538,7 @@ async def admin_user_selected(message: Message, db: Database, state: FSMContext)
             f"İstifadəçi ID: {user_id}\n"
             f"Ad: {user.get('display_name') or '-'}\n"
             f"Username: {username_text}\n"
-            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv'}\n"
+            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv olunub'}\n"
             f"Bitmə tarixi: {sub_end_s}"
         ),
         (
@@ -506,9 +552,9 @@ async def admin_user_selected(message: Message, db: Database, state: FSMContext)
 
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
-    kb.button(text=_tr(lang, "1 ay aktiv et", "Активировать 1 месяц"), callback_data="admin:user:sub:1m")
-    kb.button(text=_tr(lang, "Ayın 15-ə kimi", "До 15-го след. месяца"), callback_data="admin:user:sub:15")
-    kb.button(text=_tr(lang, "Tarix seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
+    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:users:sub:all_20")
+    kb.button(text=_tr(lang, "Gələn ayın 20-nə kimi", "До 20-го след. месяца"), callback_data="admin:user:sub:20")
+    kb.button(text=_tr(lang, "Tarixi seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
     kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
     kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:user:delete")
     kb.button(text=get_text("back", lang), callback_data="admin:users")
@@ -544,7 +590,7 @@ async def admin_user_set_name_msg(message: Message, db: Database, state: FSMCont
     if not target:
         await state.clear()
         await message.answer(
-            _tr(lang, "❌ Hədəf istifadəçi seçilməyib", "❌ Пользователь не выбран"),
+            _tr(lang, "❌ İstifadəçi seçilməyib", "❌ Пользователь не выбран"),
             reply_markup=kb_back("admin:users", lang),
         )
         return
@@ -565,14 +611,14 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
     target = int(data.get("target_user_id")) if data.get("target_user_id") else None
 
     if not target:
-        await cb.answer(_tr(lang, "İstifadəçi seçilməyib", "Пользователь не выбран"), show_alert=True)
+        await cb.answer(_tr(lang, "Имя пользователя не выбрано", "Пользователь не выбран"), show_alert=True)
         return
 
     action = cb.data.split(":")[-1]
 
     if action == "off":
         await db.deactivate_subscription(target)
-        await cb.message.answer(_tr(lang, "✅ Abunəlik deaktiv edildi", "✅ Подписка деактивирована"))
+        await cb.message.answer(_tr(lang, "✅ Abunəlik deaktiv olundu", "✅ Подписка деактивирована"))
         await cb.answer()
         return
 
@@ -583,10 +629,8 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
         return
 
     now = tz_now()
-    if action == "1m":
-        end_at = add_months(now, 1).replace(hour=23, minute=59, second=59, microsecond=0)
-    elif action == "15":
-        end_at = next_month_day_15(now)
+    if action == "20":
+        end_at = next_month_day_20(now)
     else:
         await cb.answer(_tr(lang, "❌ Seçim yanlışdır", "❌ Неверный выбор"), show_alert=True)
         return
@@ -595,12 +639,48 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
     await cb.message.answer(
         _tr(
             lang,
-            "✅ Abunəlik aktiv edildi" if activated else "✅ Abunəlik uzadıldı",
+            "✅ Abunəlik aktiv olundu" if activated else "✅ Abunəlik uzadıldı",
             "✅ Подписка активирована" if activated else "✅ Подписка продлена",
         )
     )
+    # Сразу обновляем экран деталей пользователя, чтобы увидеть новую дату
+    await _show_user_details(target, cb.message, db, state, cb.from_user.id)
     await cb.answer()
 
+
+# НОВЫЙ ОБРАБОТЧИК: Массовое продление до 20-го числа у всех пользователей разом
+@router.callback_query(F.data == "admin:users:sub:all_20")
+async def admin_users_sub_all_20(cb: CallbackQuery, db: Database, state: FSMContext):
+    if not _is_admin(cb.from_user.id):
+        await cb.answer("Not allowed", show_alert=True)
+        return
+
+    lang = await db.get_language(cb.from_user.id)
+    now = tz_now()
+    end_at = next_month_day_20(now)
+
+    # Запускаем прямую команду в базу данных через пул подключений бота
+    async with db._pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE users 
+            SET subscription_enabled = TRUE, 
+                subscription_end_at = $1
+            """, 
+            end_at
+        )
+
+    await cb.message.answer(
+        _tr(
+            lang, 
+            "✅ Bütün istifadəçilərin abunəliyi gələn ayın 20-nə kimi uzadıldı!", 
+            "✅ Подписка ВСЕХ пользователей продлена до 20-го числа следующего месяца!"
+        )
+    )
+    
+    # Возвращаем админа обратно к общему обновленному списку пользователей
+    await admin_users(cb, db, state)
+    await cb.answer()
 
 @router.message(UserSubCustom.date)
 async def admin_user_sub_custom(message: Message, db: Database, state: FSMContext):
@@ -625,7 +705,7 @@ async def admin_user_sub_custom(message: Message, db: Database, state: FSMContex
     await message.answer(
         _tr(
             lang,
-            "✅ Abunəlik aktiv edildi" if activated else "✅ Abunəlik uzadıldı",
+            "✅ Abunəlik aktiv olundu" if activated else "✅ Abunəlik uzadıldı",
             "✅ Подписка активирована" if activated else "✅ Подписка продлена",
         ),
         reply_markup=kb_back("admin:users", lang),
@@ -670,7 +750,7 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
     )
 
     if not accounts:
-        await callback.message.edit_text(header + _tr(lang, "Hesab yoxdur", "Аккаунтов нет"), reply_markup=kb_back("admin:main", lang))
+        await callback.message.edit_text(header + _tr(lang, "Hesablar yoxdur", "Аккаунтов нет"), reply_markup=kb_back("admin:main", lang))
         await callback.answer()
         return
 
@@ -712,7 +792,7 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
 
             right = _tr(
                 lang,
-                f"Məşğul: {who} | Qalan: {remain_mmss} | Bitir: {end_s}",
+                f"Məşğul: {who} | Qalıb: {remain_mmss} | Bitir: {end_s}",
                 f"Занят: {who} | Осталось: {remain_mmss} | Конец: {end_s}",
             )
 
@@ -727,7 +807,7 @@ async def admin_accounts(callback: CallbackQuery, db: Database):
 
             right = _tr(
                 lang,
-                f"Rezervdə: {who} — {remain_mmss}",
+                f"Rezerv: {who} — {remain_mmss}",
                 f"Резерв: {who} — {remain_mmss}",
             )
         else:
@@ -750,7 +830,7 @@ async def admin_manage_accounts(callback: CallbackQuery, db: Database, state: FS
 
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "Hesab əlavə et", "Добавить аккаунт"), callback_data="admin:acc:add")
-    kb.button(text=_tr(lang, "Hesabı redaktə et", "Редактировать"), callback_data="admin:acc:edit")
+    kb.button(text=_tr(lang, "Redaktə et", "Редактировать"), callback_data="admin:acc:edit")
     kb.button(text=_tr(lang, "Dayandır", "Остановить"), callback_data="admin:acc:stop")
     kb.button(text=_tr(lang, "Başlat", "Запустить"), callback_data="admin:acc:start")
     kb.button(text=_tr(lang, "Sil", "Удалить"), callback_data="admin:acc:delete")
@@ -783,7 +863,7 @@ async def admin_acc_add_name(message: Message, db: Database, state: FSMContext):
     await state.set_state(AddAccount.creds)
 
     await message.answer(
-        _tr(lang, "Gmail və Parolu göndərin (başlıq yazsanız da olar):", "Отправьте Gmail и пароль (можно с заголовком):"),
+        _tr(lang, "Gmail və şifrəni göndərin:", "Отправьте Gmail и пароль:"),
         reply_markup=kb_cancel("admin:manage_accounts", lang),
     )
 
@@ -799,7 +879,7 @@ async def admin_acc_add_creds(message: Message, db: Database, state: FSMContext)
 
     email, password = _extract_email_password(message.text or "")
     if not email or not password:
-        await message.answer(_tr(lang, "❌ Format yanlışdır. Email və parolu göndərin.", "❌ Неверный формат. Отправьте email и пароль."))
+        await message.answer(_tr(lang, "❌ Format yanlışdır. Gmail və şifrəni göndərin.", "❌ Неверный формат. Отправьте email и пароль."))
         return
 
     try:
@@ -821,7 +901,7 @@ async def admin_acc_edit(cb: CallbackQuery, db: Database, state: FSMContext):
     lang = await db.get_language(cb.from_user.id)
     await state.set_state(EditAccount.acc_id)
     await cb.message.answer(
-        _tr(lang, "Redaktə üçün hesab ID göndərin:", "Отправьте ID аккаунта для редактирования:"),
+        _tr(lang, "Redaktə üçün hesabın ID-ni göndərin:", "Отправьте ID аккаунта для редактирования:"),
         reply_markup=kb_cancel("admin:manage_accounts", lang),
     )
     await cb.answer()
@@ -846,7 +926,17 @@ async def admin_acc_edit_id(message: Message, db: Database, state: FSMContext):
 
     await state.update_data(acc_id=acc_id)
     await state.set_state(EditAccount.creds)
-    await message.answer(_tr(lang, "Yeni Gmail və Parolu göndərin (başlıq yazsanız da olar):", "Отправьте новый Gmail и пароль (можно с заголовком):"))
+    
+    # Достаем имя аккаунта (например, ZIK 9)
+    account_name = acc.get("account_name", f"ID {acc_id}")
+    
+    await message.answer(
+        _tr(
+            lang, 
+            f"**{account_name}** üçün yeni Gmail və şifrəni göndərin:", 
+            f"Отправьте новый Gmail и пароль для **{account_name}** :"
+        )
+    )
 
 
 @router.message(EditAccount.creds)
@@ -865,7 +955,7 @@ async def admin_acc_edit_creds(message: Message, db: Database, state: FSMContext
 
     email, password = _extract_email_password(message.text or "")
     if not email or not password:
-        await message.answer(_tr(lang, "❌ Format yanlışdır. Email və parolu göndərin.", "❌ Неверный формат. Отправьте email и пароль."))
+        await message.answer(_tr(lang, "❌ Format yanlışdır. Gmail və şifrəni göndərin.", "❌ Неверный формат. Отправьте Gmail и пароль."))
         return
 
     try:
@@ -892,8 +982,8 @@ async def admin_acc_action(cb: CallbackQuery, db: Database, state: FSMContext):
     await cb.message.answer(
         _tr(
             lang,
-            "Hesab ID göndərin:\n(Məs: siyahıda ID:5 yazılıbsa 5 göndərin)",
-            "Отправьте ID аккаунта:\n(Напр: если в списке ID:5 — отправьте 5)",
+            "Hesabın ID-ni göndərin:\n(Məs: siyahıda ID:5 yazılıbsa - 5 göndərin)",
+            "Отправьте ID аккаунта:\n(Напр: если в списке написано ID:5 — отправьте 5)",
         ),
         reply_markup=kb_cancel("admin:manage_accounts", lang),
     )
@@ -920,20 +1010,20 @@ async def admin_acc_action_id(message: Message, db: Database, state: FSMContext)
         if res.get("ok"):
             text = _tr(
                 lang,
-                "✅ Dayandırıldı" if res.get("stopped_now") else "✅ Dayandırılma sorğusu qəbul edildi",
+                "✅ Dayandırıldı" if res.get("stopped_now") else "✅ Dayandırılma sorğusu qəbul olundu",
                 "✅ Остановлен" if res.get("stopped_now") else "✅ Запрос на остановку принят",
             )
         else:
             text = _tr(lang, "❌ Dayandırmaq olmadı", "❌ Не удалось остановить")
     elif action == "start":
         res = await db.start_account(acc_id)
-        text = _tr(lang, "✅ Başladı" if res.get("ok") else "❌ Başlatmaq olmadı", "✅ Запущен" if res.get("ok") else "❌ Не удалось запустить")
+        text = _tr(lang, "✅ İşə salınıb" if res.get("ok") else "❌ İşə salmaq olmadı", "✅ Запущен" if res.get("ok") else "❌ Не удалось запустить")
     elif action == "delete":
         res = await db.request_delete_account(acc_id)
         if res.get("ok"):
             text = _tr(
                 lang,
-                "✅ Silindi" if res.get("deleted_now") else "✅ Silinmə sorğusu qəbul edildi",
+                "✅ Silindi" if res.get("deleted_now") else "✅ Silinmə sorğusu qəbul olundu",
                 "✅ Удалён" if res.get("deleted_now") else "✅ Запрос на удаление принят",
             )
         else:
@@ -981,7 +1071,7 @@ async def admin_announcement_send(message: Message, db: Database, state: FSMCont
 
     await state.clear()
     await message.answer(
-        _tr(lang, f"✅ Mesaj {ok} istifadəçiyə göndərildi", f"✅ Сообщение отправлено {ok} пользователям"),
+        _tr(lang, f"✅ Mesaj {ok} istifadəçilərə göndərildi", f"✅ Сообщение отправлено {ok} пользователям"),
         reply_markup=kb_back("admin:main", lang),
     )
 
@@ -1050,7 +1140,7 @@ async def admin_complaints(cb: CallbackQuery, db: Database):
 
     if not items:
         await cb.message.edit_text(
-            _tr(lang, "📨 Açıq şikayət yoxdur.", "📨 Открытых жалоб нет."),
+            _tr(lang, "📨 Açıq şikayətlər yoxdur.", "📨 Открытых жалоб нет."),
             reply_markup=kb_back("admin:main", lang),
         )
         await cb.answer()
@@ -1139,7 +1229,7 @@ async def admin_complaint_reply_start(cb: CallbackQuery, db: Database, state: FS
     await state.set_state(ComplaintReply.text)
     await state.update_data(reply_cid=cid)
 
-    await cb.message.answer(_tr(lang, f"✍️ Şikayət #{cid} üçün cavabı yazın:", f"✍️ Напишите ответ для жалобы #{cid}:"))
+    await cb.message.answer(_tr(lang, f"✍️ Şikayət #{cid} üçün cavab yazın:", f"✍️ Напишите ответ для жалобы #{cid}:"))
     await cb.answer()
 
 
@@ -1165,7 +1255,7 @@ async def admin_complaint_reply_send(message: Message, db: Database, state: FSMC
 
     reply_text = (message.text or "").strip()
     if len(reply_text) < 2:
-        await message.answer(_tr(lang, "❌ Cavab çox qısadır", "❌ Слишком коротко"))
+        await message.answer(_tr(lang, "❌ Cavab çox qısadır", "❌ Ответ слишком короткий"))
         return
 
     user_id = int(c["user_id"])
@@ -1176,7 +1266,7 @@ async def admin_complaint_reply_send(message: Message, db: Database, state: FSMC
             _tr(
                 lang,
                 f"📩 <b>Admin cavabı</b> (Şikayət #{cid}):\n\n{reply_text}",
-                f"📩 <b>Ответ администратора</b> (Жалоба #{cid}):\n\n{reply_text}",
+                f"📩 <b>Ответ Админа</b> (Жалоба #{cid}):\n\n{reply_text}",
             ),
         )
     except Exception as e:
@@ -1215,3 +1305,16 @@ async def admin_complaint_delete(cb: CallbackQuery, db: Database):
     ok = await db.delete_complaint(cid)
     await cb.answer(_tr(lang, "Silindi" if ok else "Silinmədi", "Удалено" if ok else "Не удалено"), show_alert=True)
     await admin_complaints(cb, db)
+
+from aiogram.filters import Command
+
+@router.message(Command("reset_zik"))
+async def secret_reset_zik_accounts(message: Message, db: Database):
+    if not _is_admin(message.from_user.id):
+        return
+    
+    async with db._pool.acquire() as conn:
+        # Эта команда полностью очищает таблицу аккаунтов и сбрасывает счетчик ID обратно на 1
+        await conn.execute("TRUNCATE TABLE zik_accounts RESTART IDENTITY CASCADE;")
+    
+    await message.answer("✅ Таблица ZIK аккаунтов полностью очищена! Счетчик ID сброшен до 1. Теперь вы можете добавлять аккаунты заново.")
