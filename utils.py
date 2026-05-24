@@ -75,10 +75,10 @@ def add_months(dt: datetime, months: int) -> datetime:
     return dt.replace(year=year, month=month, day=day)
 
 
-def next_month_day_15(dt: datetime) -> datetime:
-    """Return datetime set to the 15th of the next month at 23:59:59."""
+def next_month_day_20(dt: datetime) -> datetime:
+    """Return datetime set to the 20th of the next month at 23:59:59."""
     nxt = add_months(dt, 1)
-    return nxt.replace(day=15, hour=23, minute=59, second=59, microsecond=0)
+    return nxt.replace(day=20, hour=23, minute=59, second=59, microsecond=0)
 
 
 def parse_date(text: str, tz: str = Config.TIMEZONE) -> datetime | None:
