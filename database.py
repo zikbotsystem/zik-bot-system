@@ -964,7 +964,7 @@ class Database:
                     await conn.execute("UPDATE users SET violations_count=$2, updated_at=NOW() WHERE user_id=$1", user_id, warnings)
                     return {"warn": warnings, "banned": False}
 
-                ban_days = last_ban_days + 1 if last_ban_days >= 1 else 1
+                ban_days = 1
                 banned_until = now + timedelta(days=ban_days)
                 await conn.execute(
                     """
