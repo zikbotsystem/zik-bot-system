@@ -70,10 +70,10 @@ def kb_user_main(lang: str):
 
 def kb_account_offer(session_id: int, lang: str):
     kb = InlineKeyboardBuilder()
-    kb.button(text=get_text("enter_zik", lang), callback_data=f"user:enter:{session_id}")
+    # Оставляем только кнопку подтверждения и кнопку отмены
+    kb.button(text="Təsdiqlə" if lang == "az" else "Подтвердить", callback_data=f"user:enter:{session_id}")
     kb.button(text=get_text("cancel", lang), callback_data=f"user:cancel_offer:{session_id}")
-    kb.button(text=get_text("copy_credentials", lang), callback_data=f"user:copy:{session_id}")
-    kb.adjust(2, 1)
+    kb.adjust(2) # Кнопки будут красиво стоять в один ряд
     return kb.as_markup()
 
 
@@ -105,4 +105,18 @@ def kb_extend_options(session_id: int, lang: str):
     kb.button(text=get_text("extend_30min", lang), callback_data=f"user:extend_apply:{session_id}:30")
     kb.button(text=get_text("extend_1hour", lang), callback_data=f"user:extend_apply:{session_id}:60")
     kb.adjust(2)
+    return kb.as_markup()
+
+
+def kb_queue_status(lang: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text=get_text("back", lang), callback_data="user:main")
+    kb.button(text="Ləğv et" if lang == "az" else "Отменить", callback_data="user:queue:leave")
+    kb.adjust(2) # Кнопки встанут красиво в один ряд
+    return kb.as_markup()
+
+
+def kb_after_warning(lang: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Aydındır, əsas menyuya qayıt" if lang == "az" else "Понятно, вернуться в главное меню", callback_data="user:main")
     return kb.as_markup()
