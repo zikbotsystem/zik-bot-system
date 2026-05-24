@@ -15,6 +15,8 @@ from keyboards import (
     kb_extend_options,
     kb_queue_offer,
     kb_user_main,
+    kb_queue_status,
+    kb_after_warning,
 )
 
 router = Router(name="user")
@@ -207,6 +209,7 @@ async def user_get_account(callback: CallbackQuery, db: Database):
     user_id = callback.from_user.id
     lang = await db.get_language(user_id)
 
+    # 1. Проверка: имеет ли пользователь право брать аккаунт (бан/подписка)
     allowed, reason = await db.is_user_allowed(user_id)
     if not allowed:
         if reason == "banned":
@@ -228,6 +231,7 @@ async def user_get_account(callback: CallbackQuery, db: Database):
         await callback.answer()
         return
 
+    # 2. Проверка: есть ли уже у пользователя активная/зарезервированная сессия
     existing = await db.get_user_active_session(user_id)
     if existing:
         st = existing.get("state")
@@ -267,6 +271,23 @@ async def user_get_account(callback: CallbackQuery, db: Database):
             await callback.answer()
             return
 
+    # 3. НОВОЕ: Проверка на нахождение в очереди
+    is_queued = await db.is_in_queue(user_id)
+    if is_queued:
+        async with db._pool.acquire() as conn:
+            pos = await conn.fetchval("SELECT position FROM queue WHERE user_id=$1 AND is_active=TRUE", user_id)
+        
+        text = _tr(
+            lang,
+            f"✅ Siz artıq növbədəsiniz. Sıra: {pos}. Hesab sərbəst olan kimi bot sizə yazacaq (10 dəqiqə təsdiq vaxtı).",
+            f"✅ Вы уже находитесь в очереди. Ваш номер: {pos}. Как появится аккаунт, бот напишет (10 минут на подтверждение)."
+        )
+        # Выводим статус с нашей новой кнопкой "Отмена"
+        await callback.message.edit_text(text, reply_markup=kb_queue_status(lang))
+        await callback.answer()
+        return
+
+    # 4. Попытка выдать свободный аккаунт напрямую
     s = await db.reserve_free_account(user_id, from_queue=False, confirm_minutes=Config.CONFIRM_MINUTES_DIRECT)
     if not s:
         text1 = _tr(lang, "⚠️ Hazırda bütün ZIK hesabları məşğuldur", "⚠️ На данный момент все ZIK аккаунты заняты")
@@ -287,10 +308,12 @@ async def user_get_account(callback: CallbackQuery, db: Database):
     await db.remove_from_queue(user_id)
 
     text1 = _tr(lang, f"✅ Sərbəst ZIK hesabı tapıldı ({account_name})", f"✅ Найден свободный ZIK аккаунт ({account_name})")
+    
+    # 5. Текст с обновленной кнопкой "Подтвердить" (Задача №4)
     text2 = _tr(
         lang,
-        f"❗ ZIK-ə daxil olmaq üçün mütləq 'ZIK-ə daxil ol' düyməsini {timeout} dəqiqə ərzində basın. Əks halda hesab sərbəst buraxılacaq.",
-        f"❗ Для входа обязательно нажмите 'Войти в ZIK' в течении {timeout} минут. Иначе аккаунт освободится.",
+        f"❗ Hesabı təsdiqləmək üçün mütləq 'Təsdiqlə' düyməsini {timeout} dəqiqə ərzində basın. Əks halda hesab sərbəst buraxılacaq.",
+        f"❗ Для подтверждения обязательно нажмите 'Подтвердить' в течение {timeout} минут. Иначе аккаунт освободится.",
     )
 
     await callback.message.edit_text(text1, reply_markup=None)
@@ -319,7 +342,7 @@ async def user_join_queue(callback: CallbackQuery, db: Database):
         f"✅ Siz növbəyə qoşuldunuz. Sıra: {pos}. Hesab sərbəst olan kimi bot yazacaq (10 dəqiqə təsdiq vaxtı).",
         f"✅ Вы заняли место в очереди. Ваш номер: {pos}. Как появится аккаунт, бот напишет (10 минут на подтверждение).",
     )
-    await callback.message.edit_text(text, reply_markup=kb_back("user:main", lang))
+    await callback.message.edit_text(text, reply_markup=kb_queue_status(lang))
     await callback.answer()
 
 
@@ -389,7 +412,7 @@ async def user_copy(callback: CallbackQuery, db: Database):
         await callback.answer(_tr(lang, "Sessiya tapılmadı", "Сессия не найдена"), show_alert=True)
         return
     if s.get("state") != "active":
-        await callback.answer(_tr(lang, "Əvvəlcə 'ZIK-ə daxil ol' basın", "Сначала нажмите 'Войти в ZIK'"), show_alert=True)
+        await callback.answer(_tr(lang, "Əvvəlcə 'Təsdiqlə' düyməsinə basın", "Сначала нажмите кнопку 'Подтвердить'"), show_alert=True)
         return
 
     first_time = await db.mark_copy_sent(user_id, session_id)
@@ -483,4 +506,26 @@ async def user_extend_apply(callback: CallbackQuery, db: Database):
     await callback.message.answer(
         _tr(lang, f"✅ Ümumi qalan vaxt: {remaining_min} dəq.", f"✅ Общее оставшееся время: {remaining_min} мин.")
     )
+    await callback.answer()
+
+@router.callback_query(F.data == "user:queue:leave")
+async def user_queue_leave(callback: CallbackQuery, db: Database):
+    user_id = callback.from_user.id
+    lang = await db.get_language(user_id)
+
+    # Удаляем пользователя из таблиц очередей через пул соединений
+    async with db._pool.acquire() as conn:
+        await conn.execute("DELETE FROM queue WHERE user_id = $1", user_id)
+        try:
+            await conn.execute("DELETE FROM zik_queue WHERE user_id = $1", user_id)
+        except Exception:
+            pass
+
+    text = _tr(
+        lang,
+        "✅ Siz növbədən çıxdınız.",
+        "✅ Вы вышли из очереди."
+    )
+    
+    await callback.message.edit_text(text, reply_markup=kb_user_main(lang))
     await callback.answer()
