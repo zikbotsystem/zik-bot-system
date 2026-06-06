@@ -74,20 +74,16 @@ def _user_display_name(u: dict) -> str:
 
 
 def _az_sort_key(name: str) -> list[int]:
-    # Карта весов для букв азербайджанского алфавита (регистронезависимая)
     az_alphabet = "abcçdeəfgğhıijkqlmnoöprsştuüvyz"
     weights = {char: idx for idx, char in enumerate(az_alphabet)}
     
     result = []
-    
-    # ИЗОЛЯЦИЯ ПЕРВОГО СЛОВА: берем только само имя до первого пробела
     first_word = name.split()[0] if name else ""
 
     for char in first_word.lower():
         if char in weights:
             result.append(weights[char])
         else:
-            # Для цифр и спецсимволов оставляем их код, но сдвигаем дальше алфавита
             result.append(100 + ord(char))
     return result
 
@@ -100,27 +96,18 @@ def _split_and_sort_users(users: list[dict]) -> tuple[list[dict], list[dict]]:
 
     admin_order = {uid: i for i, uid in enumerate(admin_ids)}
     
-    # Сортировка админов (по порядку из настроек)
     admins.sort(key=lambda u: admin_order.get(int(u["user_id"]), 999999))
 
-    # Умная сортировка обычных пользователей:
-    # 1. Сначала разделяем: названные/активированные (группа 0) и абсолютно новые «гости» (группа 1).
-    #    Новый гость — это тот, у кого имя начинается на "User " или подписка никогда не активировалась (нет даты конца).
-    # 2. Названных пользователей сортируем по азербайджанскому алфавиту.
-    # 3. Новых пользователей сортируем по дате добавления (кто позже зашел — тот ниже).
     def regular_sort_logic(u: dict):
         display_name = (u.get("display_name") or "").strip()
         sub_end = u.get("subscription_end_at")
         
-        # Проверяем, является ли пользователь абсолютно новым гостем
         is_new_guest = not display_name or display_name.startswith("User ") or sub_end is None
         
         if is_new_guest:
-            # Группа 1: Уходят в самый конец списка и сортируются по дате создания
             created_at = u.get("created_at") or datetime.min
             return (1, created_at, int(u["user_id"]))
         else:
-            # Группа 0: Идут в начале по азербайджанскому алфавиту
             return (0, _az_sort_key(display_name), int(u["user_id"]))
 
     regulars.sort(key=regular_sort_logic)
@@ -173,7 +160,9 @@ def _zik_login_url() -> str:
 
 async def _show_user_details(
     target_user_id: int,
-    event_message,
+    chat_id: int,
+    message_id: int,
+    bot,
     db: Database,
     state: FSMContext,
     actor_user_id: int,
@@ -182,8 +171,10 @@ async def _show_user_details(
     user = await db.get_user(target_user_id)
 
     if not user:
-        await event_message.edit_text(
+        await bot.edit_message_text(
             _tr(lang, "❌ İstifadəçi tapılmadı", "❌ Пользователь не найден"),
+            chat_id=chat_id,
+            message_id=message_id,
             reply_markup=kb_back("admin:users", lang),
         )
         return
@@ -203,7 +194,7 @@ async def _show_user_details(
             f"İstifadəçi ID: {target_user_id}\n"
             f"Ad: {user.get('display_name') or '-'}\n"
             f"Username: {username_text}\n"
-            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv olundu'}\n"
+            f"Abunəlik: {'Aktiv' if sub_enabled else 'Deaktiv olunub'}\n"
             f"Bitmə tarixi: {sub_end_s}"
         ),
         (
@@ -225,7 +216,7 @@ async def _show_user_details(
     kb.button(text=get_text("back", lang), callback_data="admin:users")
     kb.adjust(2, 2, 2, 1)
 
-    await event_message.edit_text(text, reply_markup=kb.as_markup())
+    await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb.as_markup())
 
 
 class AddAccount(StatesGroup):
@@ -301,12 +292,8 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
     all_users = admins + regulars
 
     PAGE_SIZE = 50
-    SAFE_TEXT_LIMIT = 3500  # запас до лимита Telegram
+    SAFE_TEXT_LIMIT = 3500
 
-    # callback_data может быть:
-    # admin:users
-    # admin:users:0
-    # admin:users:50
     parts = callback.data.split(":")
     offset = 0
     if len(parts) >= 3:
@@ -331,11 +318,11 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         days = int(u.get("last_ban_days") or 0)
         sus = "⚠️ " if u.get("is_suspicious") else ""
 
-        # Вытаскиваем дату окончания подписки
         sub_end = u.get("subscription_end_at")
+        sub_enabled = u.get("subscription_enabled")
         
-        # Если дата есть (подписка активировалась), форматируем её как ГГГГ-ММ-ДД
-        if sub_end:
+        # Исправление 1: Дата выводится только если подписка активна (subscription_enabled == True)
+        if sub_enabled and sub_end:
             sub_date_s = sub_end.strftime("%Y-%m-%d")
             fines = _tr(
                 lang,
@@ -343,7 +330,6 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
                 f"Наруш. - {viol} / Дни - {days} / ({sub_date_s})"
             )
         else:
-            # Если подписка никогда не активировалась или была удалена из базы
             fines = _tr(
                 lang,
                 f"Poz. - {viol} / Gün - {days}",
@@ -357,29 +343,23 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         )
 
     page_users = all_users[offset:offset + PAGE_SIZE]
-
     blocks = []
     shown_count = 0
 
     for u in page_users:
         block = build_block(u)
-
         footer_preview = _tr(
             lang,
             "\n\nİstifadəçini açmaq üçün onun ID sətrinin üzərinə basın.",
             "\n\nЧтобы открыть пользователя, нажмите на его строку с ID.",
         )
-
         test_text = "\n\n".join(blocks + [block]) + footer_preview
-
         if len(test_text) > SAFE_TEXT_LIMIT:
             break
-
         blocks.append(block)
         shown_count += 1
 
     if not blocks:
-        # На всякий случай, если даже 1 блок оказался слишком длинным
         first_user = page_users[0]
         blocks = [build_block(first_user)]
         shown_count = 1
@@ -399,24 +379,11 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
     next_offset = offset + shown_count
 
     kb = InlineKeyboardBuilder()
-
     if offset > 0:
-        kb.button(
-            text=_tr(lang, "⬅️ Geri", "⬅️ Назад"),
-            callback_data=f"admin:users:{prev_offset}"
-        )
-
+        kb.button(text=_tr(lang, "⬅️ Geri", "⬅️ Назад"), callback_data=f"admin:users:{prev_offset}")
     if next_offset < len(all_users):
-        kb.button(
-            text=_tr(lang, "İrəli ➡️", "Вперёд ➡️"),
-            callback_data=f"admin:users:{next_offset}"
-        )
-
-    kb.button(
-        text=get_text("back", lang),
-        callback_data="admin:main"
-    )
-
+        kb.button(text=_tr(lang, "İrəli ➡️", "Вперёд ➡️"), callback_data=f"admin:users:{next_offset}")
+    kb.button(text=get_text("back", lang), callback_data="admin:main")
     kb.adjust(2, 1)
 
     await callback.message.edit_text(text, reply_markup=kb.as_markup())
@@ -428,7 +395,6 @@ async def admin_user_open_by_command(message: Message, db: Database, state: FSMC
         return
 
     lang = await db.get_language(message.from_user.id)
-
     raw = (message.text or "").strip()
     m = re.match(r"^/u_(\d+)$", raw)
     if not m:
@@ -502,7 +468,7 @@ async def admin_user_open_from_button(cb: CallbackQuery, db: Database, state: FS
         await cb.answer(_tr(lang, "İstifadəçi tapılmadı", "Пользователь не найден"), show_alert=True)
         return
 
-    await _show_user_details(user_id, cb.message, db, state, cb.from_user.id)
+    await _show_user_details(user_id, cb.message.chat.id, cb.message.message_id, cb.bot, db, state, cb.from_user.id)
     await cb.answer()
 
 
@@ -563,6 +529,17 @@ async def admin_user_selected(message: Message, db: Database, state: FSMContext)
     await message.answer(text, reply_markup=kb.as_markup())
 
 
+# Обработчик кнопки Отмена (когда запрашивается имя или дата)
+@router.callback_query(F.data == "admin:user_cancel_input")
+async def admin_user_cancel_input(cb: CallbackQuery, state: FSMContext):
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    await state.set_state(UserSelect.user_id)
+    await cb.answer()
+
+
 @router.callback_query(F.data == "admin:user:set_name")
 async def admin_user_set_name(cb: CallbackQuery, db: Database, state: FSMContext):
     if not _is_admin(cb.from_user.id):
@@ -571,10 +548,14 @@ async def admin_user_set_name(cb: CallbackQuery, db: Database, state: FSMContext
 
     lang = await db.get_language(cb.from_user.id)
     await state.set_state(UserSetName.name)
-    await cb.message.edit_text(
+    await state.update_data(card_msg_id=cb.message.message_id)
+    
+    # Отправляем запрос снизу, не закрывая карточку пользователя
+    prompt = await cb.message.answer(
         _tr(lang, "İstifadəçinin adını yazın:", "Введите имя пользователя:"),
-        reply_markup=kb_cancel("admin:users", lang),
+        reply_markup=kb_cancel("admin:user_cancel_input", lang),
     )
+    await state.update_data(prompt_msg_id=prompt.message_id)
     await cb.answer()
 
 
@@ -589,15 +570,27 @@ async def admin_user_set_name_msg(message: Message, db: Database, state: FSMCont
 
     if not target:
         await state.clear()
-        await message.answer(
-            _tr(lang, "❌ İstifadəçi seçilməyib", "❌ Пользователь не выбран"),
-            reply_markup=kb_back("admin:users", lang),
-        )
+        await message.answer(_tr(lang, "❌ İstifadəçi seçilməyib", "❌ Пользователь не выбран"), reply_markup=kb_back("admin:users", lang))
         return
 
     await db.set_display_name(target, (message.text or "").strip())
     await state.set_state(UserSelect.user_id)
-    await message.answer(_tr(lang, "✅ Ad yeniləndi", "✅ Имя обновлено"), reply_markup=kb_back("admin:users", lang))
+    
+    # Очищаем чат от мусора (удаляем сообщение-запрос и ответ пользователя)
+    prompt_msg_id = data.get("prompt_msg_id")
+    card_msg_id = data.get("card_msg_id")
+    try:
+        await message.delete()
+        if prompt_msg_id:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_msg_id)
+    except Exception:
+        pass
+
+    # Бесшовно обновляем оригинальную карточку
+    if card_msg_id:
+        await _show_user_details(target, message.chat.id, card_msg_id, message.bot, db, state, message.from_user.id)
+    else:
+        await message.answer(_tr(lang, "✅ Ad yeniləndi", "✅ Имя обновлено"), reply_markup=kb_back("admin:users", lang))
 
 
 @router.callback_query(F.data.startswith("admin:user:sub:"))
@@ -611,20 +604,27 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
     target = int(data.get("target_user_id")) if data.get("target_user_id") else None
 
     if not target:
-        await cb.answer(_tr(lang, "Имя пользователя не выбрано", "Пользователь не выбран"), show_alert=True)
+        await cb.answer(_tr(lang, "İstifadəçi seçilməyib", "Пользователь не выбран"), show_alert=True)
         return
 
     action = cb.data.split(":")[-1]
 
     if action == "off":
         await db.deactivate_subscription(target)
-        await cb.message.answer(_tr(lang, "✅ Abunəlik deaktiv olundu", "✅ Подписка деактивирована"))
-        await cb.answer()
+        await cb.answer(_tr(lang, "✅ Abunəlik deaktiv olundu", "✅ Подписка деактивирована"), show_alert=False)
+        # Сразу обновляем карточку
+        await _show_user_details(target, cb.message.chat.id, cb.message.message_id, cb.bot, db, state, cb.from_user.id)
         return
 
     if action == "custom":
         await state.set_state(UserSubCustom.date)
-        await cb.message.answer(_tr(lang, "Tarixi yazın (YYYY-MM-DD):", "Введите дату (YYYY-MM-DD):"))
+        await state.update_data(card_msg_id=cb.message.message_id)
+        # Отправляем запрос снизу, не закрывая карточку
+        prompt = await cb.message.answer(
+            _tr(lang, "Tarixi yazın (YYYY-MM-DD):", "Введите дату (YYYY-MM-DD):"),
+            reply_markup=kb_cancel("admin:user_cancel_input", lang)
+        )
+        await state.update_data(prompt_msg_id=prompt.message_id)
         await cb.answer()
         return
 
@@ -636,19 +636,18 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
         return
 
     activated = await db.set_subscription(target, end_at)
-    await cb.message.answer(
+    await cb.answer(
         _tr(
             lang,
             "✅ Abunəlik aktiv olundu" if activated else "✅ Abunəlik uzadıldı",
             "✅ Подписка активирована" if activated else "✅ Подписка продлена",
-        )
+        ),
+        show_alert=False
     )
-    # Сразу обновляем экран деталей пользователя, чтобы увидеть новую дату
-    await _show_user_details(target, cb.message, db, state, cb.from_user.id)
-    await cb.answer()
+    # Сразу обновляем экран деталей пользователя
+    await _show_user_details(target, cb.message.chat.id, cb.message.message_id, cb.bot, db, state, cb.from_user.id)
 
 
-# НОВЫЙ ОБРАБОТЧИК: Массовое продление до 20-го числа у всех пользователей разом
 @router.callback_query(F.data == "admin:users:sub:all_20")
 async def admin_users_sub_all_20(cb: CallbackQuery, db: Database, state: FSMContext):
     if not _is_admin(cb.from_user.id):
@@ -659,28 +658,39 @@ async def admin_users_sub_all_20(cb: CallbackQuery, db: Database, state: FSMCont
     now = tz_now()
     end_at = next_month_day_20(now)
 
-    # Запускаем прямую команду в базу данных через пул подключений бота
     async with db._pool.acquire() as conn:
         await conn.execute(
             """
             UPDATE users 
             SET subscription_enabled = TRUE, 
-                subscription_end_at = $1
+                subscription_end_at = $1,
+                subscription_activated_at = CASE
+                    WHEN subscription_activated_at IS NULL THEN NOW() ELSE subscription_activated_at
+                END,
+                updated_at = NOW()
             """, 
             end_at
         )
 
-    await cb.message.answer(
+    # Показываем всплывающее окно (Popup), что магия сработала для всех
+    await cb.answer(
         _tr(
             lang, 
             "✅ Bütün istifadəçilərin abunəliyi gələn ayın 20-nə kimi uzadıldı!", 
             "✅ Подписка ВСЕХ пользователей продлена до 20-го числа следующего месяца!"
-        )
+        ),
+        show_alert=True
     )
     
-    # Возвращаем админа обратно к общему обновленному списку пользователей
-    await admin_users(cb, db, state)
-    await cb.answer()
+    # Бесшовно обновляем открытую карточку
+    data = await state.get_data()
+    target = int(data.get("target_user_id")) if data.get("target_user_id") else None
+    
+    if target:
+        await _show_user_details(target, cb.message.chat.id, cb.message.message_id, cb.bot, db, state, cb.from_user.id)
+    else:
+        await admin_users(cb, db, state)
+
 
 @router.message(UserSubCustom.date)
 async def admin_user_sub_custom(message: Message, db: Database, state: FSMContext):
@@ -702,14 +712,29 @@ async def admin_user_sub_custom(message: Message, db: Database, state: FSMContex
 
     activated = await db.set_subscription(target, dt)
     await state.set_state(UserSelect.user_id)
-    await message.answer(
-        _tr(
-            lang,
-            "✅ Abunəlik aktiv olundu" if activated else "✅ Abunəlik uzadıldı",
-            "✅ Подписка активирована" if activated else "✅ Подписка продлена",
-        ),
-        reply_markup=kb_back("admin:users", lang),
-    )
+    
+    # Очищаем мусор из чата
+    prompt_msg_id = data.get("prompt_msg_id")
+    card_msg_id = data.get("card_msg_id")
+    try:
+        await message.delete()
+        if prompt_msg_id:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_msg_id)
+    except Exception:
+        pass
+
+    # Бесшовно обновляем карточку пользователя
+    if card_msg_id:
+        await _show_user_details(target, message.chat.id, card_msg_id, message.bot, db, state, message.from_user.id)
+    else:
+        await message.answer(
+            _tr(
+                lang,
+                "✅ Abunəlik aktiv olundu" if activated else "✅ Abunəlik uzadıldı",
+                "✅ Подписка активирована" if activated else "✅ Подписка продлена",
+            ),
+            reply_markup=kb_back("admin:users", lang),
+        )
 
 
 @router.callback_query(F.data == "admin:user:delete")
@@ -729,7 +754,7 @@ async def admin_user_delete(cb: CallbackQuery, db: Database, state: FSMContext):
     async with db._pool.acquire() as conn:
         await conn.execute("DELETE FROM users WHERE user_id=$1", target)
 
-    await cb.message.answer(_tr(lang, "✅ İstifadəçi silindi", "✅ Пользователь удалён"), reply_markup=kb_back("admin:users", lang))
+    await cb.message.edit_text(_tr(lang, "✅ İstifadəçi silindi", "✅ Пользователь удалён"), reply_markup=kb_back("admin:users", lang))
     await cb.answer()
 
 
@@ -927,7 +952,6 @@ async def admin_acc_edit_id(message: Message, db: Database, state: FSMContext):
     await state.update_data(acc_id=acc_id)
     await state.set_state(EditAccount.creds)
     
-    # Достаем имя аккаунта (например, ZIK 9)
     account_name = acc.get("account_name", f"ID {acc_id}")
     
     await message.answer(
@@ -1314,7 +1338,6 @@ async def secret_reset_zik_accounts(message: Message, db: Database):
         return
     
     async with db._pool.acquire() as conn:
-        # Эта команда полностью очищает таблицу аккаунтов и сбрасывает счетчик ID обратно на 1
         await conn.execute("TRUNCATE TABLE zik_accounts RESTART IDENTITY CASCADE;")
     
     await message.answer("✅ Таблица ZIK аккаунтов полностью очищена! Счетчик ID сброшен до 1. Теперь вы можете добавлять аккаунты заново.")
