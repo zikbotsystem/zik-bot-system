@@ -208,7 +208,8 @@ async def _show_user_details(
 
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
-    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:users:sub:all_20")
+    # ИСПРАВЛЕНО: Новый скрытый сигнал для кнопки "У ВСЕХ"
+    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:sub:all_20")
     kb.button(text=_tr(lang, "Gələn ayın 20-nə kimi", "До 20-го след. месяца"), callback_data="admin:user:sub:20")
     kb.button(text=_tr(lang, "Tarixi seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
     kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
@@ -321,7 +322,6 @@ async def admin_users(callback: CallbackQuery, db: Database, state: FSMContext):
         sub_end = u.get("subscription_end_at")
         sub_enabled = u.get("subscription_enabled")
         
-        # Исправление 1: Дата выводится только если подписка активна (subscription_enabled == True)
         if sub_enabled and sub_end:
             sub_date_s = sub_end.strftime("%Y-%m-%d")
             fines = _tr(
@@ -439,7 +439,8 @@ async def admin_user_open_by_command(message: Message, db: Database, state: FSMC
 
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
-    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:users:sub:all_20")
+    # ИСПРАВЛЕНО: Новый скрытый сигнал
+    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:sub:all_20")
     kb.button(text=_tr(lang, "Gələn ayın 20-nə kimi", "До 20-го след. месяца"), callback_data="admin:user:sub:20")
     kb.button(text=_tr(lang, "Tarixi seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
     kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
@@ -518,7 +519,8 @@ async def admin_user_selected(message: Message, db: Database, state: FSMContext)
 
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "Ad təyin et", "Задать имя"), callback_data="admin:user:set_name")
-    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:users:sub:all_20")
+    # ИСПРАВЛЕНО: Новый скрытый сигнал
+    kb.button(text=_tr(lang, "Gələn ayın 20-dək HAMIDA", "До 20-го след. У ВСЕХ"), callback_data="admin:sub:all_20")
     kb.button(text=_tr(lang, "Gələn ayın 20-nə kimi", "До 20-го след. месяца"), callback_data="admin:user:sub:20")
     kb.button(text=_tr(lang, "Tarixi seç", "Выбрать дату"), callback_data="admin:user:sub:custom")
     kb.button(text=_tr(lang, "Deaktiv et", "Деактивировать"), callback_data="admin:user:sub:off")
@@ -529,7 +531,6 @@ async def admin_user_selected(message: Message, db: Database, state: FSMContext)
     await message.answer(text, reply_markup=kb.as_markup())
 
 
-# Обработчик кнопки Отмена (когда запрашивается имя или дата)
 @router.callback_query(F.data == "admin:user_cancel_input")
 async def admin_user_cancel_input(cb: CallbackQuery, state: FSMContext):
     try:
@@ -550,7 +551,6 @@ async def admin_user_set_name(cb: CallbackQuery, db: Database, state: FSMContext
     await state.set_state(UserSetName.name)
     await state.update_data(card_msg_id=cb.message.message_id)
     
-    # Отправляем запрос снизу, не закрывая карточку пользователя
     prompt = await cb.message.answer(
         _tr(lang, "İstifadəçinin adını yazın:", "Введите имя пользователя:"),
         reply_markup=kb_cancel("admin:user_cancel_input", lang),
@@ -576,7 +576,6 @@ async def admin_user_set_name_msg(message: Message, db: Database, state: FSMCont
     await db.set_display_name(target, (message.text or "").strip())
     await state.set_state(UserSelect.user_id)
     
-    # Очищаем чат от мусора (удаляем сообщение-запрос и ответ пользователя)
     prompt_msg_id = data.get("prompt_msg_id")
     card_msg_id = data.get("card_msg_id")
     try:
@@ -586,7 +585,6 @@ async def admin_user_set_name_msg(message: Message, db: Database, state: FSMCont
     except Exception:
         pass
 
-    # Бесшовно обновляем оригинальную карточку
     if card_msg_id:
         await _show_user_details(target, message.chat.id, card_msg_id, message.bot, db, state, message.from_user.id)
     else:
@@ -612,14 +610,12 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
     if action == "off":
         await db.deactivate_subscription(target)
         await cb.answer(_tr(lang, "✅ Abunəlik deaktiv olundu", "✅ Подписка деактивирована"), show_alert=False)
-        # Сразу обновляем карточку
         await _show_user_details(target, cb.message.chat.id, cb.message.message_id, cb.bot, db, state, cb.from_user.id)
         return
 
     if action == "custom":
         await state.set_state(UserSubCustom.date)
         await state.update_data(card_msg_id=cb.message.message_id)
-        # Отправляем запрос снизу, не закрывая карточку
         prompt = await cb.message.answer(
             _tr(lang, "Tarixi yazın (YYYY-MM-DD):", "Введите дату (YYYY-MM-DD):"),
             reply_markup=kb_cancel("admin:user_cancel_input", lang)
@@ -644,11 +640,11 @@ async def admin_user_sub(cb: CallbackQuery, db: Database, state: FSMContext):
         ),
         show_alert=False
     )
-    # Сразу обновляем экран деталей пользователя
     await _show_user_details(target, cb.message.chat.id, cb.message.message_id, cb.bot, db, state, cb.from_user.id)
 
 
-@router.callback_query(F.data == "admin:users:sub:all_20")
+# ИСПРАВЛЕНО: Обработчик теперь реагирует на уникальный сигнал, а не на "admin:users..."
+@router.callback_query(F.data == "admin:sub:all_20")
 async def admin_users_sub_all_20(cb: CallbackQuery, db: Database, state: FSMContext):
     if not _is_admin(cb.from_user.id):
         await cb.answer("Not allowed", show_alert=True)
@@ -672,7 +668,6 @@ async def admin_users_sub_all_20(cb: CallbackQuery, db: Database, state: FSMCont
             end_at
         )
 
-    # Показываем всплывающее окно (Popup), что магия сработала для всех
     await cb.answer(
         _tr(
             lang, 
@@ -682,7 +677,6 @@ async def admin_users_sub_all_20(cb: CallbackQuery, db: Database, state: FSMCont
         show_alert=True
     )
     
-    # Бесшовно обновляем открытую карточку
     data = await state.get_data()
     target = int(data.get("target_user_id")) if data.get("target_user_id") else None
     
@@ -713,7 +707,6 @@ async def admin_user_sub_custom(message: Message, db: Database, state: FSMContex
     activated = await db.set_subscription(target, dt)
     await state.set_state(UserSelect.user_id)
     
-    # Очищаем мусор из чата
     prompt_msg_id = data.get("prompt_msg_id")
     card_msg_id = data.get("card_msg_id")
     try:
@@ -723,7 +716,6 @@ async def admin_user_sub_custom(message: Message, db: Database, state: FSMContex
     except Exception:
         pass
 
-    # Бесшовно обновляем карточку пользователя
     if card_msg_id:
         await _show_user_details(target, message.chat.id, card_msg_id, message.bot, db, state, message.from_user.id)
     else:
