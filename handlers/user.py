@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest
 
 from config import Config
 from database import Database, now_baku
@@ -61,6 +62,14 @@ async def _safe_delete_messages(bot, chat_id: int, message_ids: list[int]) -> No
             pass
 
 
+async def clear_previous_messages(bot, chat_id: int, start_message_id: int, count: int = 15) -> None:
+    for msg_id in range(start_message_id, start_message_id - count, -1):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except TelegramBadRequest:
+            pass
+
+
 def kb_home_menu(lang: str, user_id: int):
     kb = InlineKeyboardBuilder()
     kb.button(text=_tr(lang, "👤 İstifadəçi menyusu", "👤 Меню пользователя"), callback_data="user:main")
@@ -73,7 +82,16 @@ def kb_home_menu(lang: str, user_id: int):
 @router.callback_query(F.data == "user:main")
 async def user_main(callback: CallbackQuery, db: Database):
     lang = await db.get_language(callback.from_user.id)
-    await callback.message.edit_text(
+    current_id = callback.message.message_id
+    
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+        
+    await clear_previous_messages(callback.bot, callback.from_user.id, current_id - 2, 15)
+    
+    await callback.message.answer(
         "👤 Menyu" if lang == "az" else "👤 Меню",
         reply_markup=kb_user_main(lang),
     )
@@ -351,9 +369,17 @@ async def user_cancel_offer(callback: CallbackQuery, db: Database):
     user_id = callback.from_user.id
     lang = await db.get_language(user_id)
     session_id = int(callback.data.split(":")[-1])
+    current_id = callback.message.message_id
 
     ok = await db.cancel_offer(user_id, session_id)
     await db.remove_from_queue(user_id)
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await clear_previous_messages(callback.bot, user_id, current_id - 1, 15)
 
     if ok:
         text1 = _tr(
@@ -366,10 +392,10 @@ async def user_cancel_offer(callback: CallbackQuery, db: Database):
             "❗ Yenidən daxil olmaq üçün 'ZIK hesabı al' düyməsini basın.",
             "❗ Если хотите войти в ZIK, нажмите снова 'Взять ZIK аккаунт'.",
         )
-        await callback.message.edit_text(text1, reply_markup=None)
+        await callback.message.answer(text1)
         await callback.message.answer(text2, reply_markup=kb_user_main(lang))
     else:
-        await callback.message.edit_text(_tr(lang, "❌ Ləğv edilə bilmədi", "❌ Не удалось отменить"), reply_markup=kb_user_main(lang))
+        await callback.message.answer(_tr(lang, "❌ Ləğv edilə bilmədi", "❌ Не удалось отменить"), reply_markup=kb_user_main(lang))
     await callback.answer()
 
 
@@ -443,6 +469,7 @@ async def user_release(callback: CallbackQuery, db: Database):
     user_id = callback.from_user.id
     lang = await db.get_language(user_id)
     session_id = int(callback.data.split(":")[-1])
+    current_id = callback.message.message_id
 
     res = await db.release_session(user_id, session_id, require_tab_closed=True)
     if not res.get("ok") and res.get("reason") == "tab_open":
@@ -465,8 +492,15 @@ async def user_release(callback: CallbackQuery, db: Database):
 
     timer_msg_ids = await db.pop_timer_msg_ids(session_id)
     await _safe_delete_messages(callback.bot, user_id, timer_msg_ids)
+    
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
 
-    await callback.message.edit_text(
+    await clear_previous_messages(callback.bot, user_id, current_id - 1, 15)
+
+    await callback.message.answer(
         _tr(lang, "✅ Hesab sərbəst buraxıldı.", "✅ Аккаунт был освобожден."),
         reply_markup=kb_user_main(lang),
     )
