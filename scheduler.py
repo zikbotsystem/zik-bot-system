@@ -39,7 +39,7 @@ async def _append_timer_msg_ids(db: Database, session_id: int, new_ids: list[int
         await db.save_timer_msg_ids(session_id, merged)
 
 
-async def clear_previous_messages(bot: Bot, chat_id: int, start_message_id: int, count: int = 15) -> None:
+async def clear_previous_messages(bot: Bot, chat_id: int, start_message_id: int, count: int = 100) -> None:
     for msg_id in range(start_message_id, start_message_id - count, -1):
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
@@ -113,7 +113,7 @@ async def run_scheduler(bot: Bot, db: Database):
                     )
                     sent_info = await bot.send_message(uid, release_msg)
                     
-                    await clear_previous_messages(bot, uid, sent_info.message_id - 1, 15)
+                    await clear_previous_messages(bot, uid, sent_info.message_id - 1, 100)
 
                     result = await db.add_violation_and_maybe_ban(uid)
                     if not result.get("banned"):
