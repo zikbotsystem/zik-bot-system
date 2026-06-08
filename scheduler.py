@@ -94,7 +94,11 @@ async def run_scheduler(bot: Bot, db: Database):
                         f"❗ Siz hesabı təyin edilmiş {minutes} dəqiqə ərzində götürmədiniz, ona görə də o sərbəst buraxıldı.",
                         f"❗ Так как вы не взяли аккаунт в течении выделенных {minutes} минут после его получения, он был освобожден.",
                     )
-                    await bot.send_message(uid, msg)
+                    # Отправляем уведомление и запоминаем его ID
+                    sent_msg = await bot.send_message(uid, msg)
+                    
+                    # ОЧИСТКА: Удаляем зависшие кнопки "Təsdiqlə/Ləğv et" и весь мусор над ними (100 сообщений)
+                    await clear_previous_messages(bot, uid, sent_msg.message_id - 1, 100)
 
                 if ev["type"] == "session_expired":
                     session_id = int(ev["session_id"])
