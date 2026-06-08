@@ -9,6 +9,7 @@ from config import Config
 from database import Database
 from keyboards import kb_account_offer, kb_extend_options, kb_after_warning
 from utils import format_dt
+from aiogram.exceptions import TelegramBadRequest
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,14 @@ async def _append_timer_msg_ids(db: Database, session_id: int, new_ids: list[int
     merged = [int(x) for x in old_ids] + [int(x) for x in new_ids]
     if merged:
         await db.save_timer_msg_ids(session_id, merged)
+
+
+async def clear_previous_messages(bot: Bot, chat_id: int, start_message_id: int, count: int = 15) -> None:
+    for msg_id in range(start_message_id, start_message_id - count, -1):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except TelegramBadRequest:
+            pass
 
 
 async def run_scheduler(bot: Bot, db: Database):
@@ -91,22 +100,21 @@ async def run_scheduler(bot: Bot, db: Database):
                     session_id = int(ev["session_id"])
                     account_name = ev.get("account_name", "ZIK")
 
-                    # Köhnə timer / creds mesajlarını sil
                     timer_msg_ids = await db.pop_timer_msg_ids(session_id)
                     await _safe_delete_messages(bot, uid, timer_msg_ids)
 
                     creds_msg_ids = await db.pop_creds_msg_ids(session_id)
                     await _safe_delete_messages(bot, uid, creds_msg_ids)
 
-                    # НОВОЕ: Сообщение о том, что бот сам освободил аккаунт
                     release_msg = _tr(
                         lang,
                         f"Bot '{account_name}' hesabını özü sərbəst buraxdı.",
                         f"Бот автоматически освободил аккаунт '{account_name}'."
                     )
-                    await bot.send_message(uid, release_msg)
+                    sent_info = await bot.send_message(uid, release_msg)
+                    
+                    await clear_previous_messages(bot, uid, sent_info.message_id - 1, 15)
 
-                    # violation + possible ban
                     result = await db.add_violation_and_maybe_ban(uid)
                     if not result.get("banned"):
                         warn_no = int(result.get("warn") or 0)
@@ -115,7 +123,6 @@ async def run_scheduler(bot: Bot, db: Database):
                             f"❗ Siz botdan istifadə qaydalarını pozmusunuz (ZIK hesabını sərbəst buraxmamaq). Bu {warn_no}-ci xəbərdarlıqdır. 3 xəbərdarlıqdan sonra giriş 1 gün bağlanacaq.",
                             f"❗ Вы нарушили правила использования бота (не освободили аккаунт). Это {warn_no}-ое предупреждение. После 3-го предупреждения доступ будет закрыт на 1 день.",
                         )
-                        # Добавляем спасительную кнопку возврата в меню
                         await bot.send_message(uid, msg, reply_markup=kb_after_warning(lang))
                     else:
                         ban_days = int(result.get("ban_days") or 1)
@@ -126,7 +133,6 @@ async def run_scheduler(bot: Bot, db: Database):
                             f"‼️ 3 təkrar pozuntuya görə giriş {ban_days} gün bağlandı. Giriş {until_s} tarixində bərpa olunacaq.",
                             f"‼️ По причине трёх повторных нарушений доступ закрыт на {ban_days} день. Доступ восстановится в {until_s}.",
                         )
-                        # Добавляем спасительную кнопку возврата в меню
                         await bot.send_message(uid, msg, reply_markup=kb_after_warning(lang))
 
             # 4) Assign free accounts to queue users
