@@ -62,7 +62,7 @@ async def _safe_delete_messages(bot, chat_id: int, message_ids: list[int]) -> No
             pass
 
 
-async def clear_previous_messages(bot, chat_id: int, start_message_id: int, count: int = 15) -> None:
+async def clear_previous_messages(bot, chat_id: int, start_message_id: int, count: int = 100) -> None:
     for msg_id in range(start_message_id, start_message_id - count, -1):
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
@@ -89,7 +89,29 @@ async def user_main(callback: CallbackQuery, db: Database):
     except Exception:
         pass
         
-    await clear_previous_messages(callback.bot, callback.from_user.id, current_id - 2, 15)
+    await clear_previous_messages(callback.bot, callback.from_user.id, current_id - 2, 100)
+    
+    await callback.message.answer(
+        "👤 Menyu" if lang == "az" else "👤 Меню",
+        reply_markup=kb_user_main(lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "user:warning_clear")
+async def user_warning_clear(callback: CallbackQuery, db: Database):
+    lang = await db.get_language(callback.from_user.id)
+    current_id = callback.message.message_id
+    
+    # Удаляем само предупреждение с кнопкой
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+        
+    # Стираем 100 сообщений, но перепрыгиваем 1 сообщение (current_id - 2) 
+    # чтобы оставить текст "Bot hesabını özü sərbəst buraxdı."
+    await clear_previous_messages(callback.bot, callback.from_user.id, current_id - 2, 100)
     
     await callback.message.answer(
         "👤 Menyu" if lang == "az" else "👤 Меню",
@@ -379,7 +401,7 @@ async def user_cancel_offer(callback: CallbackQuery, db: Database):
     except Exception:
         pass
 
-    await clear_previous_messages(callback.bot, user_id, current_id - 1, 15)
+    await clear_previous_messages(callback.bot, user_id, current_id - 1, 100)
 
     if ok:
         text1 = _tr(
@@ -498,7 +520,7 @@ async def user_release(callback: CallbackQuery, db: Database):
     except Exception:
         pass
 
-    await clear_previous_messages(callback.bot, user_id, current_id - 1, 15)
+    await clear_previous_messages(callback.bot, user_id, current_id - 1, 100)
 
     await callback.message.answer(
         _tr(lang, "✅ Hesab sərbəst buraxıldı.", "✅ Аккаунт был освобожден."),
