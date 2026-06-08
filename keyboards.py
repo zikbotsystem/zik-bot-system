@@ -118,5 +118,5 @@ def kb_queue_status(lang: str):
 
 def kb_after_warning(lang: str):
     kb = InlineKeyboardBuilder()
-    kb.button(text="Aydındır, əsas menyuya qayıt" if lang == "az" else "Понятно, вернуться в главное меню", callback_data="user:main")
+    kb.button(text="Aydındır, əsas menyuya qayıt" if lang == "az" else "Понятно, вернуться в главное меню", callback_data="user:warning_clear")
     return kb.as_markup()
