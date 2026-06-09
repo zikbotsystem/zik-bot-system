@@ -404,17 +404,17 @@ async def user_cancel_offer(callback: CallbackQuery, db: Database):
     await clear_previous_messages(callback.bot, user_id, current_id - 1, 100)
 
     if ok:
-        text1 = _tr(
-            lang,
-            "❗ Siz ZIK hesabından imtina etdiniz, ona görə də hesab sərbəst buraxıldı.",
-            "❗ Так как вы отказались от ZIK аккаунта, он был освобожден.",
-        )
+      #  text1 = _tr(
+      #      lang,
+      #      "❗ Siz ZIK hesabından imtina etdiniz, ona görə də hesab sərbəst buraxıldı.",
+      #      "❗ Так как вы отказались от ZIK аккаунта, он был освобожден.",
+      #  )
         text2 = _tr(
             lang,
             "❗ Yenidən daxil olmaq üçün 'ZIK hesabı al' düyməsini basın.",
             "❗ Если хотите войти в ZIK, нажмите снова 'Взять ZIK аккаунт'.",
         )
-        await callback.message.answer(text1)
+      #  await callback.message.answer(text1)
         await callback.message.answer(text2, reply_markup=kb_user_main(lang))
     else:
         await callback.message.answer(_tr(lang, "❌ Ləğv edilə bilmədi", "❌ Не удалось отменить"), reply_markup=kb_user_main(lang))
