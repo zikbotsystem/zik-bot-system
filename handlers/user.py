@@ -72,9 +72,9 @@ async def clear_previous_messages(bot, chat_id: int, start_message_id: int, coun
 
 def kb_home_menu(lang: str, user_id: int):
     kb = InlineKeyboardBuilder()
-    kb.button(text=_tr(lang, "👤 İstifadəçi menyusu", "👤 Меню пользователя"), callback_data="user:main")
+    kb.button(text=_tr(lang, "👤 İstifadəçi menyusu", "👤 Меню Пользователя"), callback_data="user:main")
     if _is_admin(user_id):
-        kb.button(text=_tr(lang, "👑 Admin menyusu", "👑 Админ меню"), callback_data="admin:main")
+        kb.button(text=_tr(lang, "👑 Admin menyusu", "👑 Меню Админа"), callback_data="admin:main")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -147,14 +147,14 @@ async def user_fines(callback: CallbackQuery, db: Database):
         (
             "🧾 <b>Mənim cərimələrim</b>\n\n"
             f"• Pozuntu sayı: <b>{violations}</b>\n"
-            f"• Son ban müddəti: <b>{last_ban_days} gün</b>\n"
+            f"• Ban müddəti: <b>{last_ban_days} gün</b>\n"
             f"• Ban bitmə tarixi: <b>{banned_str}</b>\n"
         ),
         (
             "🧾 <b>Мои штрафы</b>\n\n"
             f"• Кол-во нарушений: <b>{violations}</b>\n"
-            f"• Последний бан: <b>{last_ban_days} дней</b>\n"
-            f"• Бан до: <b>{banned_str}</b>\n"
+            f"• Срок бана: <b>{last_ban_days} дней</b>\n"
+            f"• Дата окончания бана: <b>{banned_str}</b>\n"
         ),
     )
 
@@ -170,7 +170,7 @@ async def user_feedback_start(callback: CallbackQuery, db: Database, state: FSMC
     text = _tr(
         lang,
         "✍️ Rəy/şikayətinizi yazın və göndərin (1 mesaj).\n\nLəğv etmək üçün <b>Geri</b> düyməsini basın.",
-        "✍️ Напишите ваш отзыв/жалобу (1 сообщение).\n\nЧтобы отменить — нажмите <b>Назад</b>.",
+        "✍️ Напишите ваш отзыв/жалобу и отправьте (1 сообщение).\n\nЧтобы отменить — нажмите <b>Назад</b>.",
     )
     await callback.message.edit_text(text, reply_markup=kb_back("user:main", lang))
     await callback.answer()
@@ -183,7 +183,7 @@ async def user_feedback_receive(message: Message, db: Database, state: FSMContex
     text_in = (message.text or "").strip()
 
     if len(text_in) < 5:
-        await message.answer(_tr(lang, "❗ Çox qısadır. Bir az detallı yazın.", "❗ Слишком коротко. Напишите подробнее."))
+        await message.answer(_tr(lang, "❗ Mesaj çox qısadır, daha ətraflı yazın.", "❗ Сообщение слишком короткое. Напишите более подробно."))
         return
 
     cid = await db.add_complaint(user_id, text_in)
@@ -258,14 +258,14 @@ async def user_get_account(callback: CallbackQuery, db: Database):
             end_str = end.strftime("%H:%M, %d %B") if end else "-"
             text = _tr(
                 lang,
-                f"‼️ Siz ZIK Analytics-ə giriş hüququndan məhrumsunuz. Giriş {end_str} tarixində bərpa olunacaq.",
-                f"‼️ Вы лишены доступа к ZIK Analytics. Доступ восстановится в {end_str}.",
+                f"‼️ Təkrarlanan qayda pozuntularına görə ZIK Analytics-ə girişiniz müvəqqəti olaraq məhdudlaşdırılıb. Giriş {end_str} tarixində bərpa olunacaq.",
+                f"‼️ Из-за повторных нарушений ваш доступ к ZIK Analytics временно ограничен. Доступ восстановится: {end_str}.",
             )
         else:
             text = _tr(
                 lang,
-                "⚠️ Abunəliyiniz deaktivdir. Zəhmət olmasa adminlə əlaqə saxlayın.",
-                "⚠️ Ваша подписка деактивирована. Пожалуйста, свяжитесь с Админом.",
+                "⚠️ Abunəliyiniz deaktivdir. Aktivləşdirmək üçün adminlə əlaqə saxlayın.",
+                "⚠️ Ваша подписка деактивирована. Для активации свяжитесь с Админом.",
             )
         await callback.message.edit_text(text, reply_markup=kb_back("user:main", lang))
         await callback.answer()
@@ -286,8 +286,8 @@ async def user_get_account(callback: CallbackQuery, db: Database):
                 minutes_left = max(0, int((deadline - now_baku()).total_seconds() // 60))
             text = _tr(
                 lang,
-                f"❗ Siz artıq bir hesab rezerv etmisiniz ({account_name}). Qalan vaxt: {minutes_left} dəq.",
-                f"❗ Вы уже получили аккаунт ({account_name}) и он ожидает подтверждения. Осталось: {minutes_left} мин.",
+                f"❗ Sizə artıq ({account_name}) hesabı ayrılıb və təsdikləmə gözləyir. Təsdikləmə üçün qalan vaxt: {minutes_left} dəq.",
+                f"❗ Вам уже выделен аккаунт ({account_name}) и он ожидает подтверждения. Для подтверждения осталось: {minutes_left} мин.",
             )
             await callback.message.edit_text(text, reply_markup=kb_account_offer(session_id, lang))
             await callback.answer()
@@ -319,8 +319,8 @@ async def user_get_account(callback: CallbackQuery, db: Database):
         
         text = _tr(
             lang,
-            f"✅ Siz artıq növbədəsiniz. Sıra: {pos}. Hesab sərbəst olan kimi bot sizə yazacaq (10 dəqiqə təsdiq vaxtı).",
-            f"✅ Вы уже находитесь в очереди. Ваш номер: {pos}. Как появится аккаунт, бот напишет (10 минут на подтверждение)."
+            f"✅ Siz artıq növbədəsiniz. Hesablardan biri boşalan kimi Bot sizə bildiriş göndərəcək (təsdiqləmək üçün 10 dəqiqə vaxtınız olacaq).",
+            f"✅ Вы уже находитесь в очереди. Как только освободится один из аккаунтов, Бот вам сообщит (на подтверждение у вас будет 10 минут)."
         )
         # Выводим статус с нашей новой кнопкой "Отмена"
         await callback.message.edit_text(text, reply_markup=kb_queue_status(lang))
@@ -333,8 +333,8 @@ async def user_get_account(callback: CallbackQuery, db: Database):
         text1 = _tr(lang, "⚠️ Hazırda bütün ZIK hesabları məşğuldur", "⚠️ На данный момент все ZIK аккаунты заняты")
         text2 = _tr(
             lang,
-            "❗ Növbəyə qoşula bilərsiniz və hesab sərbəst olan kimi bot sizə yazacaq.",
-            "❗ Вы можете занять очередь и бот напишет, как только появится свободный аккаунт.",
+            "❗ Növbəyə qoşula bilərsiniz və hesablardan biri boşalan kimi Bot sizə bildiriş göndərəcək.",
+            "❗ Вы можете занять очередь и как только освободится один из аккаунтов, Бот вам сообщит.",
         )
         await callback.message.edit_text(text1, reply_markup=None)
         await callback.message.answer(text2, reply_markup=kb_queue_offer(lang))
@@ -352,8 +352,8 @@ async def user_get_account(callback: CallbackQuery, db: Database):
     # 5. Текст с обновленной кнопкой "Подтвердить" (Задача №4)
     text2 = _tr(
         lang,
-        f"❗ Hesabı təsdiqləmək üçün mütləq 'Təsdiqlə' düyməsini {timeout} dəqiqə ərzində basın. Əks halda hesab sərbəst buraxılacaq.",
-        f"❗ Для подтверждения обязательно нажмите 'Подтвердить' в течение {timeout} минут. Иначе аккаунт освободится.",
+        f"❗ Bu hesabı əldə etmək üçün mütləq 'Təsdiqlə' düyməsinə {timeout} dəqiqə ərzində basın. Əks halda hesab sərbəst buraxılacaq.",
+        f"❗ Для получения этого аккаунта обязательно нажмите 'Подтвердить' в течение {timeout} минут. Иначе аккаунт освободится.",
     )
 
     await callback.message.edit_text(text1, reply_markup=None)
@@ -373,14 +373,14 @@ async def user_join_queue(callback: CallbackQuery, db: Database):
 
     existing = await db.get_user_active_session(user_id)
     if existing:
-        await callback.answer(_tr(lang, "Siz artıq hesab almısınız.", "У вас уже есть аккаунт."), show_alert=True)
+        await callback.answer(_tr(lang, "Siz artıq ZIK hesabı almısınız.", "Вы уже получили ZIK аккаунт."), show_alert=True)
         return
 
     pos = await db.add_to_queue(user_id)
     text = _tr(
         lang,
-        f"✅ Siz növbəyə qoşuldunuz. Sıra: {pos}. Hesab sərbəst olan kimi bot yazacaq (10 dəqiqə təsdiq vaxtı).",
-        f"✅ Вы заняли место в очереди. Ваш номер: {pos}. Как появится аккаунт, бот напишет (10 минут на подтверждение).",
+        f"✅ Siz növbəyə qoşuldunuz. Hesablardan biri boşalan kimi Bot sizə bildiriş göndərəcək (təsdiqləmək üçün 10 dəqiqə vaxtınız olacaq).",
+        f"✅ Вы заняли место в очереди. Как только освободится один из аккаунтов, Бот вам сообщит (на подтверждение у вас будет 10 минут).",
     )
     await callback.message.edit_text(text, reply_markup=kb_queue_status(lang))
     await callback.answer()
@@ -411,8 +411,8 @@ async def user_cancel_offer(callback: CallbackQuery, db: Database):
       #  )
         text2 = _tr(
             lang,
-            "❗ Yenidən daxil olmaq üçün 'ZIK hesabı al' düyməsini basın.",
-            "❗ Если хотите войти в ZIK, нажмите снова 'Взять ZIK аккаунт'.",
+            "👤Menyu",
+            "👤Меню",
         )
       #  await callback.message.answer(text1)
         await callback.message.answer(text2, reply_markup=kb_user_main(lang))
@@ -437,11 +437,11 @@ async def user_enter(callback: CallbackQuery, db: Database):
     token = str(s.get("token"))
     login_url = _append_token(Config.ZIK_LOGIN_URL, token)
 
-    text1 = _tr(lang, f"✅ Siz '{account_name}' hesabını aldınız", f"✅ Вы успешно взяли аккаунт '{account_name}'")
+    text1 = _tr(lang, f"✅ Siz '{account_name}' hesabını əldə etdiniz", f"✅ Вы успешно получили аккаунт '{account_name}'")
     text2 = _tr(
         lang,
-        "❗ ZIK-ə daxil olmaq üçün düyməni basın. Avtomatik doldurma işləməsə, 'Gmail və Parolu kopyalayın' düyməsini basın.",
-        "❗ Для входа нажмите кнопку. Если автозаполнение не работает, нажмите 'Скопировать Gmail и Пароль'.",
+        "❗ Hesaba keçid etmək üçün 'ZIK-ə daxil ol' düyməsinə basın. Hesabın giriş məlumatlarını öyrənmək üçün 'Gmail və Şifrəni kopyala' düyməsinə basın.",
+        "❗ Для входа в аккаунт нажмите кнопку 'Войти в ZIK'. Чтобы узнать данные входа от аккаунта, нажмите кнопку 'Скопировать Gmail и Пароль'.",
     )
 
     await callback.message.edit_text(text1, reply_markup=None)
@@ -476,11 +476,11 @@ async def user_copy(callback: CallbackQuery, db: Database):
     email = acc["email"]
     password = acc["password"]
 
-    header = _tr(lang, "❗ ZIK hesabının Gmail və Parolu:", "❗ Gmail и Пароль от ZIK аккаунта:")
+    header = _tr(lang, "❗ ZIK hesabının Gmail və Şifrəsi:", "❗ Gmail и Пароль от ZIK аккаунта:")
 
     m0 = await callback.message.answer(header)
     m1 = await callback.message.answer(f"Gmail: <code>{email}</code>")
-    m2 = await callback.message.answer(f"Пароль: <code>{password}</code>" if lang == "ru" else f"Parol: <code>{password}</code>")
+    m2 = await callback.message.answer(f"Пароль: <code>{password}</code>" if lang == "ru" else f"Şifrə: <code>{password}</code>")
 
     await db.save_creds_msg_ids(session_id, [m0.message_id, m1.message_id, m2.message_id])
     await callback.answer()
@@ -523,7 +523,7 @@ async def user_release(callback: CallbackQuery, db: Database):
     await clear_previous_messages(callback.bot, user_id, current_id - 1, 100)
 
     await callback.message.answer(
-        _tr(lang, "✅ Hesab sərbəst buraxıldı.", "✅ Аккаунт был освобожден."),
+        _tr(lang, "✅ Hesab sərbəst buraxıldı.", "✅ Аккаунт освобожден."),
         reply_markup=kb_user_main(lang),
     )
     await callback.answer()
@@ -533,7 +533,7 @@ async def user_release(callback: CallbackQuery, db: Database):
 async def user_extend(callback: CallbackQuery, db: Database):
     lang = await db.get_language(callback.from_user.id)
     session_id = int(callback.data.split(":")[-1])
-    await callback.message.answer(_tr(lang, "Uzatma seçimləri:", "Варианты продления:"), reply_markup=kb_extend_options(session_id, lang))
+    await callback.message.answer(_tr(lang, "Istifadə müddətin uzatma seçimləri:", "Варианты продления времени использования:"), reply_markup=kb_extend_options(session_id, lang))
     await callback.answer()
 
 
@@ -547,7 +547,7 @@ async def user_extend_apply(callback: CallbackQuery, db: Database):
 
     r = await db.extend_session(user_id, session_id, minutes)
     if not r:
-        await callback.answer(_tr(lang, "❌ Uzatma mümkün deyil", "❌ Продление недоступно"), show_alert=True)
+        await callback.answer(_tr(lang, "❌ Istifadə müddətin uzadılması artıq mümkün deyil", "❌ Продление времени использования больше невозможно"), show_alert=True)
         return
 
     timer_msg_ids = await db.pop_timer_msg_ids(session_id)
@@ -557,7 +557,7 @@ async def user_extend_apply(callback: CallbackQuery, db: Database):
     remaining_min = max(0, int((new_end - now_baku()).total_seconds() // 60))
 
     await callback.message.answer(
-        _tr(lang, f"✅ Müddət {minutes} dəqiqə uzadıldı.", f"✅ Время использования продлено на {minutes} мин.")
+        _tr(lang, f"✅ Istifadə müddəti {minutes} dəqiqə uzadıldı.", f"✅ Время использования продлено на {minutes} мин.")
     )
     await callback.message.answer(
         _tr(lang, f"✅ Ümumi qalan vaxt: {remaining_min} dəq.", f"✅ Общее оставшееся время: {remaining_min} мин.")
