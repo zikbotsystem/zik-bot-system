@@ -16,11 +16,11 @@ def kb_language():
 def kb_choose_role(lang: str):
     kb = InlineKeyboardBuilder()
     kb.button(
-        text="Админ как войти" if lang == "ru" else "Admin kimi daxil ol",
+        text="Войти как Админ" if lang == "ru" else "Admin kimi daxil ol",
         callback_data="role:admin",
     )
     kb.button(
-        text="Пользователь как войти" if lang == "ru" else "İstifadəçi kimi daxil ol",
+        text="Войти как Пользователь" if lang == "ru" else "İstifadəçi kimi daxil ol",
         callback_data="role:user",
     )
     kb.adjust(2)
