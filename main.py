@@ -5,6 +5,7 @@ from contextlib import suppress
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramServerError
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import Config
@@ -44,19 +45,55 @@ async def main():
     dp.include_router(admin_router)
     dp.include_router(user_router)
 
-    # webhook qalığı varsa təmizlə
-    await bot.delete_webhook(drop_pending_updates=False)
-
-    scheduler_task = asyncio.create_task(run_scheduler(bot, db))
-
-    logger.info("Bot started")
+    scheduler_task = None
 
     try:
-        await dp.start_polling(bot)
+        # Telegram müvəqqəti 502 və ya timeout verərsə yenidən yoxla
+        for attempt in range(1, 11):
+            try:
+                await bot.delete_webhook(
+                    drop_pending_updates=False,
+                    request_timeout=60,
+                )
+                break
+
+            except (TelegramServerError, TelegramNetworkError) as error:
+                logger.warning(
+                    "Webhook silinmədi. Cəhd %s/10: %s",
+                    attempt,
+                    error,
+                )
+
+                if attempt == 10:
+                    raise
+
+                await asyncio.sleep(min(attempt * 5, 30))
+
+        scheduler_task = asyncio.create_task(run_scheduler(bot, db))
+
+        logger.info("Bot started")
+
+        while True:
+            try:
+                await dp.start_polling(
+                    bot,
+                    close_bot_session=False,
+                )
+                break
+
+            except (TelegramServerError, TelegramNetworkError) as error:
+                logger.warning(
+                    "Telegram bağlantı xətası: %s. Yenidən qoşulur...",
+                    error,
+                )
+                await asyncio.sleep(10)
+
     finally:
-        scheduler_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await scheduler_task
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+
+            with suppress(asyncio.CancelledError):
+                await scheduler_task
 
         await db.close()
         await bot.session.close()
