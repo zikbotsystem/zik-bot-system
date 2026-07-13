@@ -48,26 +48,19 @@ async def main():
     scheduler_task = None
 
     try:
-        # Telegram müvəqqəti 502 və ya timeout verərsə yenidən yoxla
-        for attempt in range(1, 11):
-            try:
-                await bot.delete_webhook(
-                    drop_pending_updates=False,
-                    request_timeout=60,
-                )
-                break
+        # Telegram müvəqqəti timeout/502 verərsə burada ilişib qalmasın
+        try:
+            await bot.delete_webhook(
+                drop_pending_updates=False,
+                request_timeout=20,
+            )
+            logger.info("Webhook silindi və ya artıq mövcud deyildi")
 
-            except (TelegramServerError, TelegramNetworkError) as error:
-                logger.warning(
-                    "Webhook silinmədi. Cəhd %s/10: %s",
-                    attempt,
-                    error,
-                )
-
-                if attempt == 10:
-                    raise
-
-                await asyncio.sleep(min(attempt * 5, 30))
+        except (TelegramServerError, TelegramNetworkError) as error:
+            logger.warning(
+                "Webhook yoxlanılması alınmadı, polling başladılır: %s",
+                error,
+            )
 
         scheduler_task = asyncio.create_task(run_scheduler(bot, db))
 
@@ -83,7 +76,8 @@ async def main():
 
             except (TelegramServerError, TelegramNetworkError) as error:
                 logger.warning(
-                    "Telegram bağlantı xətası: %s. Yenidən qoşulur...",
+                    "Telegram bağlantı xətası: %s. "
+                    "10 saniyə sonra yenidən qoşulur...",
                     error,
                 )
                 await asyncio.sleep(10)
